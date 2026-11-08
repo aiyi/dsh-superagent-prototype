@@ -30,6 +30,10 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
 
+## Design proposals (not implemented)
+
+- [DSH Source](docs/dsh-source-design.md): conversational Session and virtual-Thread mapping, original-message handoff, permissions and reply delivery. Design only; no voice or Source integration is included.
+
 ## Development
 
 `pnpm check` runs the typecheck, the tests and the build.
