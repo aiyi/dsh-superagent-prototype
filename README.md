@@ -30,6 +30,10 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
 
+## Design proposals (not implemented)
+
+- [Multi-repository support](docs/multi-repository-design.md): one deployment for several GitHub repositories, one repository per Ticket, the change map and an estimate. Design only; no code, settings or deployment change is included.
+
 ## Development
 
 `pnpm check` runs the typecheck, the tests and the build.
