@@ -52,7 +52,8 @@ Mixed feedback may be scoped only to a clearly separable, independently authoriz
 Otherwise observe quietly: no ACK, worker, worktree or unsolicited clarification question.
 If the human says to wait for product design, retain that hold until explicitly lifted.
 
-Ticket scope is limited to a small internal change in the deployment's repository; no public interface, product promise, behavior, new interaction or cross-module redesign.
+Ticket scope is limited to a small internal change in the Ticket's repository; no public interface, product promise, behavior, new interaction or cross-module redesign.
+When a request does not come from a GitHub repository and the deployment configures several, name the repository it works on in the accept (repository), or leave the request for a clarification; never guess.
 Configurable rules may narrow this scope, never expand it; neither this scope nor the rules apply to explicit requests, which dispatch routes.
 Judge intent and scope from the supplied discussion and relevant images.
 Do not locate implementation files or enumerate repository directories merely to admit a routine copy or styling change; the execution worker owns that investigation.

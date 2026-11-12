@@ -27,6 +27,7 @@ export const AssessmentSchema = z.object({
   title: z.string().min(1).max(160),
   worktree_name: WorktreeNameSchema.optional(),
   scope: z.string().max(1500),
+  repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'owner/name').optional().describe('Accept: the repository the ticket works on, when the request did not come from a GitHub repository or the deployment has several.'),
   intent_evidence: z.string().trim().min(1).max(700).nullish().describe('For acceptance: the quotes that establish the three facts.'),
   acknowledgement: AcknowledgementSchema.nullish().describe('For acceptance: one sentence in the source language, posted as a reply to the trigger; omit only when a matched rule asks for silence.'),
   reason: z.string().min(1).max(500),
@@ -227,7 +228,9 @@ export class MasterAssessor implements Assessor {
       await this.seed(candidate.evalId, trigger, signal)
       const { cache } = this.reads(candidate.evalId, trigger)
       const { snapshots, images, messages, cursors } = cache
-      const commands = this.host.commands.withSignal(AbortSignal.any([this.controller.signal, signal]))
+      const base = this.host.commands.withSignal(AbortSignal.any([this.controller.signal, signal]))
+      const repository = this.host.deployment.repositories[trigger.source]
+      const commands = repository && typeof base.withRepository === 'function' ? base.withRepository(repository) : base
       if (read.resource === 'image') {
         if (read.offset !== 0) throw new Error('Images are not paginated; use offset 0')
         const image = images.get(read.image_id!)
@@ -270,9 +273,14 @@ export class MasterAssessor implements Assessor {
   }
   /** Converts the assessment into an outcome under current settings and passes it to `Engine.decide` for policy verification. */
   async decide(triggerId: string, result: z.infer<typeof AssessmentSchema>, signal?: AbortSignal): Promise<{ state: string; ticket_id?: string; reason: string }> {
-    const { candidate } = this.evalFor(triggerId)
+    const { candidate, trigger } = this.evalFor(triggerId)
     signal?.throwIfAborted()
-    let outcome: AssessmentOutcome = assessmentOutcome(result, this.host.settings(), candidate.strength)
+    const repositories = Object.values(this.host.deployment.repositories)
+    const derived = this.host.deployment.repositories[trigger.source]
+    if (result.repository && repositories.length && !repositories.includes(result.repository)) throw new Error(`repository is not configured: ${result.repository}`)
+    if (result.decision === 'accept' && !result.repository && !derived && repositories.length > 1) throw new Error(`Name the repository the ticket works on: ${repositories.join(', ')}`)
+    const chosen = result.decision === 'accept' ? { ...result, repository: result.repository ?? derived ?? repositories[0] } : result
+    let outcome: AssessmentOutcome = assessmentOutcome(chosen, this.host.settings(), candidate.strength)
     if (outcome.kind === 'accept' && outcome.acknowledgement) outcome = { ...outcome, acknowledgement: checkedImText(outcome.acknowledgement) }
     const decision = this.host.engine.decide(triggerId, { ...outcome, evalId: candidate.evalId })
     return { state: decision.kind, ...(decision.ticketId ? { ticket_id: decision.ticketId } : {}), reason: reasonText(decision.reason) }

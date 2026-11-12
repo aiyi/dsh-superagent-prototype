@@ -66,7 +66,7 @@ describe('setup', () => {
     expect((await resolveDeployment(machine(), { repository: 'acme/gadgets', cli: 'gh' }, probe, path)).repository).toBe('acme/widgets')
   })
   it('names what setup needs and where it is set', async () => {
-    const needs = (place: string, code: string, values: Record<string, unknown>, github: unknown) =>
+    const needs = (place: string, code: string, values: Record<string, unknown>, github: Record<string, unknown>) =>
       expect(resolveDeployment(machine(), github, probe, path)).rejects.toEqual(setupError(place, code, values))
     const repository = 'acme/widgets'
     await needs('github', 'repositoryUnset', {}, { cli: 'gh' })

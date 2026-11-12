@@ -1,10 +1,11 @@
-/** Scoped runtime context exposed to each Source kind, isolating Sources from direct Store or Engine access. */
+/** Scoped runtime context exposed to each Source instance, isolating Sources from direct Store or Engine access. */
 import type { EngineForSources, ReceiveResult, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SetupProblem } from '../setup.ts'
 import type { SourceContext } from '../sources/host.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
+import { sameName } from '../infra/text.ts'
 import type { Outbox } from './outbox.ts'
 import type { Store } from './store.ts'
 
@@ -18,37 +19,53 @@ export interface SourceContextDeps {
   readonly deployment: Deployment
   readonly ready: Promise<void>
   configured(): boolean
-  /** Setup problem whose `place` matches the Source kind receives it on `context.problem`. */
+  /** The setup problem that pauses this Source instance, if any. */
+  problemFor?(id: string): SetupProblem | undefined
+  /** Legacy single-kind setup problems; `problemFor` supersedes them. */
   readonly setupProblem?: SetupProblem | undefined
-  /** Why setup found no Feishu bot even though the Feishu Source names a CLI. */
   readonly feishuProblem?: SetupProblem | undefined
   /** Hands a Trigger to the Engine and schedules the pass that assesses it. */
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
 }
 
 /**
- * Builds the context for one Source kind. Health reports are restricted to entries declared by the kind and
- * bound to the active registration, becoming no-ops once unregistered.
+ * Builds the context for one Source instance. Health reports are restricted to entries declared by the kind and
+ * bound to the active registration, becoming no-ops once unregistered. The default instance (id === kind) keeps the
+ * legacy instance-global KV keys; further instances store their keys under `@<id>` so they never share a cursor.
  */
-export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }): SourceContext {
+export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }, instanceId = kind.kind): SourceContext {
   const { store } = deps
-  const health = deps.sources.healthEntries(kind.health)
+  const health = deps.sources.healthEntriesFor(kind, instanceId)
+  const legacy = instanceId === kind.kind
+  const scoped = (key: string): string => legacy ? key : `${key}@${instanceId}`
   return {
+    id: instanceId,
     get deployment() { return deps.deployment },
-    commands: deps.commands,
+    get commands() {
+      try {
+        const repository = deps.deployment.repositories[instanceId]
+        if (!repository && kind.kind === 'github') throw new Error(`The repository of ${instanceId} is unavailable; fix its setup problem first`)
+        return repository && !sameName(repository, deps.commands.repository) ? deps.commands.withRepository(repository) : deps.commands
+      } catch { return deps.commands }
+    },
     ready: deps.ready,
     configured: () => deps.configured(),
-    get problem() { return [deps.feishuProblem, deps.setupProblem].find(problem => problem?.place === kind.kind) },
-    config: <C extends Record<string, unknown>>(id: string) => {
+    get problem() { return deps.problemFor?.(instanceId) ?? [deps.feishuProblem, deps.setupProblem].find(problem => problem?.place === instanceId) },
+    config: <C extends Record<string, unknown>>(id = instanceId) => {
       const instance = deps.sources.instance<C>(id)
       return instance?.enabled ? instance.config : undefined
     },
     receive: trigger => deps.receive(trigger),
     atomic: work => store.atomic(work),
     state: {
-      get: name => store.get(name),
-      set: (name, value) => { if (value === undefined) store.delete(name); else store.set(name, value) },
-      keys: prefix => store.keys(prefix),
+      get: name => store.get(scoped(name)),
+      set: (name, value) => { if (value === undefined) store.delete(scoped(name)); else store.set(scoped(name), value) },
+      keys: prefix => {
+        const names = store.keys(prefix)
+        if (legacy) return names
+        const suffix = `@${instanceId}`
+        return names.filter(name => name.endsWith(suffix)).map(name => name.slice(0, -suffix.length))
+      },
     },
     threads: {
       get: key => store.threads.get(key),

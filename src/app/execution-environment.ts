@@ -24,22 +24,37 @@ export function declaredVariables(sources: SourceRegistry, settings?: Settings):
     ...sources.declarations().map(({ kind, variables }) => ({ owner: kind, enabled: on.has(kind), variables }))]
 }
 
-export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: { id: string; name: string; directory: string }; trigger?: Trigger }): Variable[] {
-  const { deployment, sources, settings, ticket, trigger } = input
+/**
+ * Returns each variable once. A kind with several instances contributes the active instance's values: the Trigger's Source, or the
+ * instance whose repository is the Ticket's; otherwise the default instance.
+ */
+export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: { id: string; name: string; directory: string };
+  trigger?: Trigger; repository?: string }): Variable[] {
+  const { deployment, sources, settings, ticket, trigger, repository } = input
   const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '), ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id } : {} }
   const result: Variable[] = EXECUTOR_VARIABLES.filter(spec => !spec.ticket || ticket).map(spec => ({ key: spec.key, value: executor[spec.key] ?? '', description: spec.description, owner: 'executor' }))
-  for (const { kind, environment, config } of sources.environments(settings)) {
-    const values = environment.values({ deployment, config, ...trigger ? { trigger } : {} })
+  const active = trigger?.source
+  const byRepository = repository ? Object.entries(deployment.repositories).find(([, name]) => name === repository)?.[0] : undefined
+  // A Ticket's repository wins over its origin Source: a Feishu Ticket can name a GitHub repository.
+  const preferred = byRepository ?? active
+  const chosen = new Map<string, ReturnType<SourceRegistry['environments']>[number]>()
+  for (const entry of sources.environments(settings)) {
+    const current = chosen.get(entry.kind.kind)
+    const score = (source: string) => source === preferred ? 2 : source === entry.kind.kind ? 1 : 0
+    if (!current || score(entry.source) > score(current.source)) chosen.set(entry.kind.kind, entry)
+  }
+  for (const { kind, environment, config, source } of chosen.values()) {
+    const values = environment.values({ deployment, config, source, ...trigger ? { trigger } : {} })
     for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: kind.kind })
   }
   return result
 }
 
 /** Combines a ticket's fixed directory, name, and origin trigger with the deployment's current settings. */
-export function ticketEnvironment(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket: Ticket; trigger?: Trigger }) {
-  const { ticket, trigger, ...rest } = input
+export function ticketEnvironment(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket: Ticket; trigger?: Trigger; repository?: string }) {
+  const { ticket, trigger, repository, ...rest } = input
   const values = { id: ticket.id, name: ticket.execution?.name ?? '', directory: ticket.execution?.directory ?? '' }
-  return environmentOf({ ...rest, ticket: values, ...trigger ? { trigger } : {} })
+  return environmentOf({ ...rest, ticket: values, ...trigger ? { trigger } : {}, ...repository ? { repository } : {} })
 }
 export function environmentLines(variables: Variable[]): string {
   return variables.map(variable => `- ${variable.key} = ${JSON.stringify(variable.value)}: ${variable.description.en}.`).join('\n')

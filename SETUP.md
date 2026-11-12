@@ -35,7 +35,7 @@ Ask in this order, one per message, following the flow of work in [docs/001-doma
 **Sources: where requests come from.**
 
 1. **Sources.** Should the agent take requests from GitHub only, or also from Feishu chats? [GitHub only, unless the team works in Feishu.]
-2. **Repository.** Which github.com repository should the agent work on, as `owner/name`?
+2. **Repositories.** Which github.com repositories should the agent work on, as `owner/name`? [One, unless the team needs several; the first goes on the `github` card, and further repositories are added later through the Management API.]
 3. **Agent account.** Which GitHub user account will the agent act as? [A dedicated account, never the operator's own: everything the agent writes appears under this name.] It may not exist yet; creating it is an operator step.
 4. With Feishu: **which chats,** by name? The agent looks up their ids after the bot is configured.
 
@@ -46,7 +46,7 @@ Ask in this order, one per message, following the flow of work in [docs/001-doma
 
 **Execution: what the agent does with a Ticket.**
 
-7. **Checkout.** Which local clone of the repository should each Ticket check out from? [A new clone under `~/src/<name>`.]
+7. **Checkout.** Which local clone of each repository should each Ticket check out from? [A new clone per repository under `~/src/<name>`.]
 8. **Commit identity.** Who should the agent's commits name as author? [The agent account, so its work is visibly its own.] Another identity, such as the operator's, goes into the Delivery requirements prompt section.
 9. **Auto-merge.** Should the agent enable auto-merge on its own pull requests once they are ready and approved? [No: people merge until the agent's pull requests have been right for a while.] The agent never enables it as the agent account, so with yes it needs the GitHub CLI of another account that may merge: ask the operator to sign one in among the operator steps, and name it in Delivery requirements. With no, remove the auto-merge paragraph from Delivery requirements.
 
@@ -65,7 +65,7 @@ Send one message, under 300 words: what will be installed, the accounts and CLIs
 ## 4. Execute
 
 1. **Operator steps first.** Read the Accounts section of `docs/006-deployment.md`, write the CLI wrappers yourself, then send one message with what only the operator can do: create the agent account and, with auto-merge, sign a CLI in as the account that enables it, accept the repository invitation as the agent account, run `auth login` for each wrapper, and for Feishu create and publish the bot app and run the `config init` command with its secret. Wait until the operator says it is done, then check each login with `<wrapper> api user --jq .login`.
-2. **Install and start.** Follow the Install, Machine configuration, and Start and stop sections of `docs/006-deployment.md`. Skip the `git clone` of this repository: you are in its checkout. Clone the repository of question 2 if question 7 asked for a new clone. With an existing profile, skip the `dsh superagent --from-default-profile` command, which would replace the profile and delete its `cordis.patch.yml`, and edit that file instead of replacing it.
+2. **Install and start.** Follow the Install, Machine configuration, and Start and stop sections of `docs/006-deployment.md`. Skip the `git clone` of this repository: you are in its checkout. Clone each repository of question 2 if question 7 asked for new clones. With an existing profile, skip the `dsh superagent --from-default-profile` command, which would replace the profile and delete its `cordis.patch.yml`, and edit that file instead of replacing it.
 3. **Settings.** Save them through the Management API of `docs/006-deployment.md`, in this order: the `github` Source, the `feishu` Source if used, the `policy` block with the allowed lists (for Feishu, look up the chat ids with the bot's CLI first), and the `executor` block with a prepare command from the answer to question 7. Then save the prompts with the commit identity of question 8 and the auto-merge answer of question 9 in Delivery requirements. A save that returns `restarting: true` restarts dsh-superagent: wait until `scripts/dsh-superagent status` no longer exits 1 before the next request, and read the revisions again from `GET settings`.
 4. **Failures.** A refused save names the setup problem in its response body. Find it in the Troubleshooting table of `docs/006-deployment.md`, fix it, and continue. Ask the operator only for what you cannot fix yourself.
 
@@ -74,6 +74,6 @@ Send one message, under 300 words: what will be installed, the accounts and CLIs
 `scripts/dsh-superagent status` exits 0 with no setup problem. If you run in the operator's own DSH profile, create the hourly check of the Hourly check section of `docs/006-deployment.md` with your schedule tool; otherwise give the operator its prompt to schedule there. Then send one message, under 300 words:
 
 - The panel URL, and that the **Superagent** entry in the sidebar is where to look.
-- How to try it: from an account on the allowed list, comment `@<agent login> <request>` on an issue in the repository. A Ticket appears on the overview within about a minute.
+- How to try it: from an account on the allowed list, comment `@<agent login> <request>` on an issue in a configured repository. A Ticket appears on the overview within about a minute.
 - Three rules for the operator, from the Responsibility section of `docs/000-philosophy.md`: start narrow, tune for less noise, own what the agent says.
 - Where to read more: the numbered documents in `docs/`, in order.
