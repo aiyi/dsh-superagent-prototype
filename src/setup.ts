@@ -1,7 +1,7 @@
 /** Structured startup and configuration errors with the settings location where the operator can fix them. */
 import { fill } from './infra/text.ts'
 
-export type SetupPlace = 'deployment' | 'github' | 'feishu'
+export type SetupPlace = 'deployment' | 'github' | 'feishu' | (string & {})
 export const SETUP_PROBLEMS = {
   foreignFile: ['deployment', '{file} was not written by dsh-superagent; move it, or choose another state directory.'],
   gitTooOld: ['deployment', 'git does not read the github.com credential configuration dsh-superagent writes; dsh-superagent needs git 2.32 or later.'],
@@ -11,6 +11,8 @@ export const SETUP_PROBLEMS = {
   agentCliMissing: ['github', 'The agent GitHub CLI was not found.'],
   agentCliSignedOut: ['github', 'The agent GitHub CLI cannot read its account.'],
   agentCliNoAccount: ['github', 'The agent GitHub CLI did not report a GitHub account.'],
+  agentCliMismatch: ['github', 'The GitHub Source instances name different agent CLIs; use the same CLI and account for every repository.'],
+  repositoryDuplicate: ['github', '{repository} is configured for more than one GitHub Source.'],
   repositoryUnreadable: ['github', '@{account} cannot read {repository}.'],
   repositoryUnreported: ['github', 'The agent GitHub CLI did not return {repository}.'],
   repositoryReadOnly: ['github', '@{account} cannot push to {repository}.'],
@@ -29,11 +31,11 @@ export interface SetupProblem { place: SetupPlace; code: SetupCode; values: Reco
  */
 export class SetupError extends Error {
   readonly place: SetupPlace
-  constructor(readonly code: SetupCode, readonly values: Record<string, string> = {}) {
+  constructor(readonly code: SetupCode, readonly values: Record<string, string> = {}, override?: string) {
     const [place, text] = SETUP_PROBLEMS[code]
     const sentence = fill(text, values)
     super(values.output ? `${sentence}\n${values.output}` : sentence)
-    this.place = place
+    this.place = override ?? place
   }
   get problem(): SetupProblem { return { place: this.place, code: this.code, values: this.values, detail: this.message } }
 }

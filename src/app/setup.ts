@@ -1,10 +1,12 @@
 /** Probes repository and account CLIs, configures the worker execution environment and command shims, and tracks setup readiness. */
 import type { Context } from '@deepseek-ai/cordis'
 import { UserError } from '../core/index.ts'
-import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, workerProbe, type Deployment, type Machine } from '../deployment.ts'
+import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, resolveGithubInstance, sourceKind, workerProbe, type Deployment, type Machine }
+  from '../deployment.ts'
 import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
+import { sameName } from '../infra/text.ts'
 
 export interface SetupHost {
   readonly context: Context
@@ -14,17 +16,21 @@ export interface SetupHost {
 }
 
 const setupFields = (settings: Settings) =>
-  JSON.stringify(Object.entries(SETUP_FIELDS).map(([id, keys]) => keys.map(key => settings.sources[id]?.config[key] ?? '')))
+  JSON.stringify(Object.entries(settings.sources).map(([id, value]) => [id, (SETUP_FIELDS[sourceKind(id) ?? ''] ?? []).map(key => value.config[key] ?? '')]
+  ).sort(([a], [b]) => String(a).localeCompare(String(b))))
 export const setupChanged = (before: Settings, after: Settings): boolean => setupFields(before) !== setupFields(after)
 
 /**
- * Resolves the target repository, GitHub account, and optional Feishu bot by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
+ * Resolves the target repositories, the shared GitHub account, and optional Feishu bot by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
  * `Runtime` runs it at startup to gate orchestration readiness, while `Settings` uses it to validate account changes, update blocked command shims, and schedule restarts.
  */
 export class Setup {
   private resolved?: Deployment
+  /** A failure of the shared GitHub account or of the execution environment, which stops every Source. */
   problem?: SetupProblem
   feishuProblem?: SetupProblem
+  /** Setup problems that pause only one Source instance, such as a repository it cannot push to. */
+  problems: Record<string, SetupProblem> = {}
   /** PATH with the worker shim directory removed so the host's own CLI calls invoke the real binaries. */
   private readonly path: string
   /** Environment variables pointing agent subprocesses at the isolated git config and command shims. */
@@ -41,8 +47,14 @@ export class Setup {
     return this.resolved
   }
   configured(): boolean { return this.resolved !== undefined }
+  /** The setup problem that pauses `id`, or the global one when it names that place. */
+  problemFor(id: string): SetupProblem | undefined {
+    return this.problems[id] ?? (this.feishuProblem?.place === id ? this.feishuProblem
+      : this.problem?.place === id ? this.problem : undefined)
+  }
   /** Resolve deployment accounts and apply the worker environment, recording `SetupError` failures in `problem`/`feishuProblem` and rethrowing unexpected errors. */
   async run(settings: Settings): Promise<boolean> {
+    this.problems = {}
     try { this.resolved = await this.resolve(settings); return true }
     catch (error) {
       if (!(error instanceof SetupError)) throw error
@@ -57,18 +69,30 @@ export class Setup {
   }
   /** Defer the restart to the next macrotask so the current HTTP or tool caller receives its response first. */
   restart(): void { setTimeout(this.host.restart, 0) }
-  /** Verify account CLIs for a modified source block before saving, ignoring setup errors belonging to other blocks. */
+  /** Verify one Source instance's account settings before saving, ignoring setup errors belonging to other Sources. */
   async checkAccounts(block: SettingsBlock, settings: Settings): Promise<void> {
     const { machine } = this.host
-    const check = block === 'source:feishu' ? resolveFeishuBot(machine, settings.sources.feishu?.config, this.probe())
-      : resolveDeployment(machine, settings.sources.github?.config, this.probe())
-    await check.catch((error: unknown) => { if (!(error instanceof SetupError) || error.place === block.slice(7)) throw error })
+    const id = block.startsWith('source:') ? block.slice('source:'.length) : 'github'
+    if (sourceKind(id) === 'feishu') {
+      await resolveFeishuBot(machine, settings.sources[id]?.config, this.probe()).catch((error: unknown) => {
+        if (!(error instanceof SetupError) || error.place === 'feishu') throw error
+      })
+      return
+    }
+    const config = settings.sources[id]?.config ?? {}
+    // A further instance inherits the shared CLI when it names none; it may not introduce another account or CLI.
+    const declared = typeof config.cli === 'string' && config.cli ? config.cli : undefined
+    const cli = declared ?? this.resolved?.github.cli
+    const checked = await resolveGithubInstance(machine, id, { ...config, ...cli ? { cli } : {} }, this.probe())
+    if (this.resolved && id !== 'github' && (checked.github.cli !== this.resolved.github.cli || !sameName(checked.github.login, this.resolved.github.login))) {
+      throw new SetupError('agentCliMismatch', {}, id)
+    }
   }
   async blockCommands(blocked: readonly string[]): Promise<void> {
     if (this.resolved) await writeEnvironment(this.resolved, blocked)
   }
   restore(): void { this.restoreEnvironment?.(); this.restoreEnvironment = undefined }
-  /** Probes CLIs the way worker shells run them, using `stateDir` as `cwd` since it exists even before the repository clone is valid. */
+  /** Probes CLIs the way worker shells run them, using `stateDir` as `cwd` since it exists even before a repository clone is valid. */
   private probe() {
     const { context, machine, lifetime } = this.host
     return workerProbe(context.subprocess, machine.stateDir, machine.stateDir, lifetime)
@@ -76,7 +100,8 @@ export class Setup {
   private async resolve(settings: Settings): Promise<Deployment> {
     const { context, machine, lifetime } = this.host
     const probe = this.probe()
-    const deployment = await resolveDeployment(machine, settings.sources.github?.config, probe)
+    const deployment = await resolveDeployment(machine, settings.sources, probe)
+    this.problems = deployment.problems ?? {}
     const feishu = await resolveFeishuBot(machine, settings.sources.feishu?.config, probe).catch((error: unknown) => {
       if (!(error instanceof SetupError)) throw error
       this.feishuProblem = error.problem

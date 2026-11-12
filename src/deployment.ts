@@ -7,7 +7,8 @@ import s from '@deepseek-ai/schemastery'
 import { z } from 'zod'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra/environment.ts'
-import { SetupError } from './setup.ts'
+import { sameName } from './infra/text.ts'
+import { SetupError, type SetupProblem } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const absolute = (description: string) => s.string().pattern(/^\//).description(`${description} Absolute path.`)
@@ -47,15 +48,34 @@ export const GithubAccountsSchema = z.object({
   cli: z.string().trim().default(''),
 })
 export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
-/** Source configuration keys that affect deployment setup and trigger a restart when changed. */
+/** Source configuration keys that affect deployment setup and trigger a restart when changed, by Source kind. */
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
+/** The kind of a Source instance id: an instance is named after its kind, or `kind-<name>` for further instances. */
+export const sourceKind = (id: string): string | undefined => {
+  const match = /^([a-z][a-z0-9]*)(?:-|$)/.exec(id)
+  return match?.[1]
+}
 
+/** One GitHub account shared by every GitHub Source instance, and the repositories they name. */
+export interface GithubAccount { cli: string; login: string; noreply: string }
 export interface Deployment extends Machine {
+  /** The default repository: the `github` instance's, else the first resolved one. */
   repository: string
-  github: { cli: string; login: string; noreply: string }
+  /** Canonical repositories by GitHub Source instance id. */
+  repositories: Record<string, string>
+  github: GithubAccount
   feishu?: FeishuBot
+  /** Per-instance setup problems that pause only that Source instance. */
+  problems?: Record<string, SetupProblem>
 }
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
+
+/** The repository a GitHub Source instance or Thread source names; the default when the source is unknown. */
+export const repositoryOf = (deployment: Pick<Deployment, 'repositories' | 'repository'>, source?: string): string =>
+  (source ? deployment.repositories[source] : undefined) ?? deployment.repositories['github'] ?? deployment.repository
+/** The GitHub Source instance id that names `repository`, or undefined. */
+export const sourceOfRepository = (deployment: Pick<Deployment, 'repositories'>, repository: string): string | undefined =>
+  Object.entries(deployment.repositories).find(([, name]) => sameName(name, repository))?.[0]
 
 /** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */
 export function executable(name: string, path: string, exclude?: string): string {
@@ -83,26 +103,91 @@ function parsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   const result = schema.safeParse(value)
   return result.success ? result.data : undefined
 }
-/** Verify the agent's GitHub CLI identity and push access to the configured repository. */
-export async function resolveDeployment(machine: Machine, github: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<Deployment> {
-  const { stateDir } = machine
-  const accounts = GithubAccountsSchema.parse(github ?? {})
-  const remote = accounts.repository
-  if (!remote) throw new SetupError('repositoryUnset')
-  if (!accounts.cli) throw new SetupError('agentCliUnset')
+
+/** One GitHub Source instance's stored configuration. */
+export interface GithubInstanceConfig { id: string; repository: string; cli: string }
+/** Extract the GitHub Source instances from a settings `sources` record, or from a single legacy GitHub config. */
+export function githubInstances(sources: Record<string, unknown>): GithubInstanceConfig[] {
+  const ids = Object.keys(sources)
+  const lookLikeSources = ids.some(id => id === 'github' || id.startsWith('github-') || id === 'feishu')
+  const entries = lookLikeSources
+    ? ids.filter(id => id === 'github' || id.startsWith('github-')).map(id => [id, sources[id]] as const)
+    // A legacy caller passes one GithubAccounts config directly.
+    : [['github', sources] as const]
+  return entries.map(([id, stored]) => {
+    const config = stored && typeof stored === 'object' && 'config' in stored ? (stored as { config?: unknown }).config : stored
+    const parsed = GithubAccountsSchema.parse(config ?? {})
+    return { id, ...parsed }
+  })
+}
+
+/** Verify the agent's GitHub CLI identity, shared by every GitHub repository. */
+async function resolveAccount(machine: Machine, cliName: string, probe: Probe, path: string): Promise<GithubAccount> {
+  if (!cliName) throw new SetupError('agentCliUnset')
   let cli: string
-  try { cli = executable(accounts.cli, path, workerBin(stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }) }
+  try { cli = executable(cliName, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }) }
   const text = await probe([cli, 'api', 'user']).catch((error: unknown) => { throw new SetupError('agentCliSignedOut', { output: reason(error) }) })
   const agent = parsed(GithubUser, text)
   if (!agent) throw new SetupError('agentCliNoAccount')
-  // Use the canonical repository name returned by GitHub so renamed repositories match incoming notifications.
-  const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}']).catch((error: unknown) => {
-    throw new SetupError('repositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) })
-  }))
-  if (!access) throw new SetupError('repositoryUnreported', { repository: remote })
-  const repository = access.name
-  if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository })
-  return { ...machine, repository, github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
+  return { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` }
+}
+
+/** Verify one repository and return its canonical name, or the setup problem that pauses only its Source instance. */
+async function resolveRepository(instance: GithubInstanceConfig, account: GithubAccount, probe: Probe): Promise<{ repository?: string; problem?: SetupProblem }> {
+  const fail = (error: SetupError): { problem: SetupProblem } => ({ problem: { ...error.problem, place: instance.id } })
+  const remote = instance.repository
+  if (!remote) return fail(new SetupError('repositoryUnset'))
+  try {
+    // Use the canonical repository name returned by GitHub so renamed repositories match incoming notifications.
+    const access = parsed(RepositoryAccess, await probe([account.cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}']))
+    if (!access) return fail(new SetupError('repositoryUnreported', { repository: remote }))
+    if (access.push !== true) return fail(new SetupError('repositoryReadOnly', { account: account.login, repository: access.name }))
+    return { repository: access.name }
+  } catch (error) {
+    return error instanceof SetupError ? fail(error) : fail(new SetupError('repositoryUnreadable', { account: account.login, repository: remote, output: reason(error) }))
+  }
+}
+
+/**
+ * Verify the shared GitHub account and every GitHub Source instance's repository.
+ * A failing repository records a problem for its instance and leaves the others usable; a failing account is global.
+ */
+export async function resolveDeployment(machine: Machine, sources: Record<string, unknown>, probe: Probe, path = process.env.PATH ?? ''): Promise<Deployment> {
+  const instances = githubInstances(sources)
+  if (!instances.length) throw new SetupError('repositoryUnset')
+  // The worker shim exposes one `gh` command, so every GitHub instance must name the same CLI.
+  const named = instances.map(instance => instance.cli).filter(Boolean)
+  const cliName = named[0] ?? ''
+  if (named.some(cli => cli !== cliName)) throw new SetupError('agentCliMismatch')
+  const account = await resolveAccount(machine, cliName, probe, path)
+  const repositories: Record<string, string> = {}
+  const problems: Record<string, SetupProblem> = {}
+  for (const instance of instances) {
+    const { repository, problem } = await resolveRepository(instance, account, probe)
+    if (repository) {
+      const owner = Object.entries(repositories).find(([, name]) => sameName(name, repository))?.[0]
+      if (owner) problems[instance.id] = { ...new SetupError('repositoryDuplicate', { repository }).problem, place: instance.id }
+      else repositories[instance.id] = repository
+    }
+    if (problem) problems[instance.id] = problem
+  }
+  if (!Object.keys(repositories).length) {
+    // With no usable repository there is nothing to poll: fail setup globally, naming the first instance that explains why.
+    const first = problems[instances[0]!.id] ?? Object.values(problems)[0]
+    if (first) throw new SetupError(first.code as SetupError['code'], first.values, first.place)
+    throw new SetupError('repositoryUnset')
+  }
+  const repository = repositories['github'] ?? Object.values(repositories)[0]!
+  return { ...machine, repository, repositories, github: account, problems }
+}
+
+/** Verify one GitHub Source instance's repository for a settings save, without requiring the others. */
+export async function resolveGithubInstance(machine: Machine, id: string, config: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<{ repository: string; github: GithubAccount }> {
+  const parsed = GithubAccountsSchema.parse(config ?? {})
+  const account = await resolveAccount(machine, parsed.cli, probe, path)
+  const { repository, problem } = await resolveRepository({ id, ...parsed }, account, probe)
+  if (!repository) throw new SetupError((problem?.code ?? 'repositoryUnset') as SetupError['code'], problem?.values ?? {}, id)
+  return { repository, github: account }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })

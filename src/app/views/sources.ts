@@ -14,10 +14,13 @@ export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, 
   const kind = sources.kind(instance.kind)
   const starting: Health = { state: 'starting', detail: '' }
   const parts = (kind?.health ?? []).map(name => {
-    const entry = health[name]
+    const entry = health[instance.id === instance.kind ? name : `${name}:${instance.id}`]
     return { name, ...(!entry || (instance.enabled && entry.code === 'sourceOff') ? starting : entry) }
   })
-  return { id: instance.id, title: kind?.title ?? { zh: instance.id, en: instance.id }, health: parts }
+  const title = kind?.title ?? { zh: instance.id, en: instance.id }
+  const repository = typeof instance.config.repository === 'string' ? instance.config.repository : ''
+  return { id: instance.id, title: instance.id === instance.kind || !repository ? title
+    : { zh: `${title.zh} · ${repository}`, en: `${title.en} · ${repository}` }, health: parts }
 }
 export interface SetupState {
   /** Resolved deployment facts; undefined while waiting for initial setup. */
@@ -26,8 +29,10 @@ export interface SetupState {
   problem?: SetupProblem | undefined
   /** Feishu bot check failure that pauses only the Feishu Source. */
   feishuProblem?: SetupProblem | undefined
+  /** Problems that pause only one Source instance, by instance id. */
+  problems?: Record<string, SetupProblem> | undefined
 }
-export const problemOf = (id: string, setup: SetupState) => [setup.problem, setup.feishuProblem].find(problem => problem?.place === id)
+export const problemOf = (id: string, setup: SetupState) => setup.problems?.[id] ?? [setup.problem, setup.feishuProblem].find(problem => problem?.place === id)
 /** Source lifecycle state in priority order: missing kind, disabled, setup/part error, blocked on global setup, starting, paused, or ready. */
 export type SourceState = 'missing' | 'off' | 'error' | 'setup' | 'starting' | 'paused' | 'ready'
 function sourceState(instance: SourceInstance & { installed: boolean }, parts: { state: string }[], setup: SetupState): SourceState {

@@ -42,10 +42,11 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
     ready: Promise.resolve(), configured: () => true, receive, ...overrides }
   // The Sources' functions take the context; plugin entries and kind callbacks take the host, which builds each kind's context.
-  const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }) => sourceContextOf(parts, kind) }
-  const context = sourceContextOf(parts, { kind: 'feishu', health: ['github', 'feishu', 'history'] })
+  const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }, id?: string) => sourceContextOf(parts, kind, id) }
+  const github = sourceContextOf(parts, githubKind)
+  const feishu = sourceContextOf(parts, feishuKind)
   const health = overrides.sources ? healthOf.get(overrides.sources)!.all : board.all
-  return { ...value, ...context, health, store, engine, commands: parts.commands, receive, executor }
+  return { ...value, ...github, github, feishu, health, store, engine, commands: parts.commands, receive, executor }
 }
 const healthOf = new WeakMap<SourceRegistry, HealthBoard>()
 function emptyRegistry(): SourceRegistry {
@@ -137,14 +138,14 @@ describe('feishu source', () => {
       if (args[1] === '+messages-mget') return { messages: [] }
       return { thread_id: 'omt_1', has_more: false, messages: [mine, reply, earlier] }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(h.receive).toHaveBeenCalledTimes(1)
     expect(h.receive.mock.calls[0]![0]).toMatchObject({ id: key('feishu', 'om_reply'), threads: [{ source: 'feishu', id: 'oc_1:om_root' }],
       actor: { id: 'ou_guest' }, human: true, text: 'more details', meta: expect.objectContaining({ threadId: 'omt_1' }) })
     expect(h.store.get('thread-seen:feishu:oc_1:om_root')).toEqual(expect.arrayContaining(['om_reply', 'om_mine', 'om_old']))
     expect(h.store.threads.get('feishu:oc_1:om_root')?.meta).toMatchObject({ threadId: 'omt_1', url: 'https://applink.feishu.cn/client/chat/open?openChatId=oc_1', facts: { chat: { value: 'oc_1' } } })
     lark.mockRejectedValue(new Error('rate limited'))
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(h.store.threads.get('feishu:oc_1:om_root')?.meta.pollError).toContain('rate limited')
     h.store.close()
   })
@@ -168,7 +169,7 @@ describe('feishu source', () => {
       const messages = [page('om_mine', { id: 'cli_bot', sender_type: 'app' }), page('om_reply', { id: MEMBER, sender_type: 'user' })]
       return { thread_id: 'omt_dm', has_more: false, messages }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     const live = feishuTrigger({ message_id: 'om_reply', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
       content: 'and the header',
       create_time: String(Date.parse('2026-09-11 12:00')), root_id: 'om_root', thread_id: 'omt_dm' }, 'ou_bot', 'cli_bot')
@@ -190,10 +191,10 @@ describe('feishu source', () => {
     h.store.threads.save({ ...h.store.threads.get('feishu:oc_1:om_root')!,
       lastAt: new Date(Date.now() - 15 * 24 * 3600_000).toISOString() })
     const lark = vi.spyOn(h.commands, 'lark').mockResolvedValue({ items: [] })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(lark).not.toHaveBeenCalled()
     h.store.tickets.save(openTicket('ticket'))
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(lark).toHaveBeenCalled()
     h.store.close()
   })
@@ -253,7 +254,7 @@ describe('feishu source', () => {
       // Newest first: a new reply, then the one the Thread knew, and an older page that is not read.
       return { thread_id: 'omt_1', has_more: true, page_token: 'older', messages: [reply('om_3'), reply('om_2')] }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(h.receive.mock.calls.map(([trigger]) => trigger.meta.messageId)).toEqual(['om_3'])
     expect(lark.mock.calls.filter(([args]) => args[1] === '+threads-messages-list')).toHaveLength(1)
     h.store.close()
@@ -418,7 +419,7 @@ describe('github source', () => {
     expect(h.store.tickets.get('t1')).toMatchObject({ ended: { by: 'executor', outcome: 'merged', at: '2026-09-02T00:00:00.000Z' } })
     expect(h.store.threads.get('github:9')?.subscriptions).toEqual(['t1'])
     // The notice its end gives follows the language of the source request.
-    const notices = pullEndNotices(h.store.tickets.get('t1')!, request.text, 'acme/widgets')
+    const notices = pullEndNotices(h.store.tickets.get('t1')!, request.text, () => 'acme/widgets')
     expect(notices).toEqual([expect.objectContaining({ kind: 'notice', channel: expect.objectContaining({ source: 'feishu' }), text: expect.stringContaining('已合并') })])
     expect(h.executor.stop).toHaveBeenCalledOnce()
     // Resumed after the merge, the ticket works on: a later look at the merged PR reports nothing again.
@@ -430,7 +431,7 @@ describe('github source', () => {
     expect(h.store.tickets.get('t1')).toMatchObject({ ended: { outcome: 'merged' } })
     expect(Date.parse(h.store.tickets.get('t1')!.ended!.at)).toBeGreaterThan(Date.parse('2026-09-03T00:00:00Z'))
     // Its notice has the id of the first one, so it goes out once.
-    expect(pullEndNotices(h.store.tickets.get('t1')!, request.text, 'acme/widgets').map(notice => notice.id)).toEqual(notices.map(notice => notice.id))
+    expect(pullEndNotices(h.store.tickets.get('t1')!, request.text, () => 'acme/widgets').map(notice => notice.id)).toEqual(notices.map(notice => notice.id))
     h.store.close()
   })
   it('keeps a ticket working on its other open PR when one of its PRs merges', async () => {
@@ -473,7 +474,7 @@ describe('github source', () => {
     h.store.triggers.save(request)
     h.store.tickets.save({ id: 't2', title: 'two', decisionId: 'd2', mandate: { strength: 'explicit', policyVersion: '', basis: { via: 'listed' }, actor: { source: 'feishu', id: MEMBER }, scope: '' }, channels: [{ source: 'feishu', thread: 'feishu:oc_1', address: { chatId: 'oc_1', messageId: 'om_2' } }], assignments: [], inputs: [], undelivered: [], createdAt: '', updatedAt: '', ...pulled(12), origin: { triggerId: request.id, triggerIds: [request.id] } })
     expect(await observePull(h, endedPull(12, '2026-09-02T00:00:00Z', false))).toBe(true)
-    expect(pullEndNotices(h.store.tickets.get('t2')!, request.text, 'acme/widgets'))
+    expect(pullEndNotices(h.store.tickets.get('t2')!, request.text, () => 'acme/widgets'))
       .toEqual([expect.objectContaining({ text: '[PR #12](https://github.com/acme/widgets/pull/12) was closed without merging.' })])
     h.store.close()
   })
