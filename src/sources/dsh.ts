@@ -161,7 +161,7 @@ export function apply(ctx: Context): void {
     }
   }
   ctx.effect(() => { reportHealth(); const timer = setInterval(reportHealth, 5000); return () => { clearInterval(timer) } }, 'dsh: configuration health')
-  ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/voice-bridge/v1/sources/', handler: async (req, res) => {
+  ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/voice-bridge/v1/sources', handler: async (req, res) => {
     try {
       const path = new URL(req.url ?? '/', 'http://localhost').pathname
       const match = /^\/voice-bridge\/v1\/sources\/(dsh(?:-[a-z0-9-]+)?)\/handoffs(?:\/([A-Za-z0-9_-]{1,128}))?$/.exec(path)

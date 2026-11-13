@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { chmodSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { join } from 'node:path'
-import type { Context } from '@deepseek-ai/cordis'
+import { Context } from '@deepseek-ai/cordis'
+import WebServer, { type WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { apply, acceptDsh, DshConfigSchema, dshKind, type DshConfig } from '../src/sources/dsh.ts'
 import { DshHandoffSchema, dshHandoff, dshTrigger, type DshHandoff, type DshPage } from '../src/sources/dsh-protocol.ts'
 import { dshPost, dshToken, DSH_MAX_BYTES } from '../src/sources/dsh-transport.ts'
@@ -30,6 +31,7 @@ let h: Host, config: DshConfig, voice: Server, bridge: Server, bridgeUrl: string
 let histories: Record<string, unknown>[], replies: Record<string, unknown>[], page: DshPage, historyGate: Promise<void> | undefined
 let replyFailure = false, replyGone = false, badHistory = false, hugeHistory = false, loseReplyAck = false
 let cleanup: (() => void)[]
+let bridgeRoute: WebRoute
 beforeEach(async () => {
   h = await startRuntime()
   histories = []; replies = []; cleanup = []; historyGate = undefined
@@ -57,7 +59,7 @@ beforeEach(async () => {
   config = DshConfigSchema.parse({ bindingId: 'user', principalId: 'voice-user', voiceUrl, incomingTokenFile, voiceTokenFile })
   let handler!: (req: IncomingMessage, res: ServerResponse) => Promise<void>
   const context = { orchestrator: h.runtime, webServer: { host: '127.0.0.1',
-    register: (route: { handler: typeof handler }) => { handler = route.handler; return () => {} } },
+    register: (route: WebRoute) => { bridgeRoute = route; handler = route.handler as typeof handler; return () => {} } },
   effect: (effect: () => () => void) => { cleanup.push(effect()) } }
   apply(context as unknown as Context)
   const settings = h.runtime.store.settings()
@@ -89,6 +91,25 @@ async function original(resource: string, session?: string) {
   const result = await read(resource, session)
   return JSON.parse(String(result.text)) as Record<string, unknown>
 }
+
+it('serves authenticated handoffs through the real native Web Server prefix matcher', async () => {
+  const native = new Context()
+  try {
+    await native.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    native.webServer.register(bridgeRoute)
+    await vi.waitFor(() => expect(native.webServer.port).toBeGreaterThan(0))
+    const base = `http://127.0.0.1:${native.webServer.port}/voice-bridge/v1/sources/dsh/handoffs`
+    const request = handoff('real-webserver')
+    const response = await fetch(base, { method: 'POST', headers: { authorization: `Bearer ${INCOMING}`,
+      'content-type': 'application/json' }, body: JSON.stringify(request) })
+    expect(response.status).toBe(200)
+    const receipt = await response.json()
+    expect(receipt).toMatchObject({ status: 'received', requestId: request.requestId })
+    const query = await fetch(`${base}/${request.requestId}`, { headers: { authorization: `Bearer ${INCOMING}` } })
+    expect(query.status).toBe(200)
+    expect(await query.json()).toEqual(receipt)
+  } finally { await native.fiber.dispose() }
+})
 
 it('saves a new Voice Source through settings without GitHub account probing or a setup restart', async () => {
   const accounts = vi.spyOn(Setup.prototype, 'checkAccounts')
