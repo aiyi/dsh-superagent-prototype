@@ -11,6 +11,7 @@ import { sourceContext } from '../src/sources/host.ts'
 import { startRuntime, type Host } from './fixtures/host.ts'
 import { Store } from '../src/app/store.ts'
 import { dshRoute } from '../src/app/dsh-routing.ts'
+import { Setup } from '../src/app/setup.ts'
 
 const INCOMING = 'a'.repeat(48), OUTGOING = 'b'.repeat(48)
 const send = (res: ServerResponse, code: number, data: unknown) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)) }
@@ -88,6 +89,16 @@ async function original(resource: string, session?: string) {
   const result = await read(resource, session)
   return JSON.parse(String(result.text)) as Record<string, unknown>
 }
+
+it('saves a new Voice Source through settings without GitHub account probing or a setup restart', async () => {
+  const accounts = vi.spyOn(Setup.prototype, 'checkAccounts')
+  try {
+    const result = await h.runtime.settings.save('source:dsh-new', { enabled: true, config }, 0, 'panel')
+    expect(result).toMatchObject({ saved: true, restarting: false })
+    expect(accounts).not.toHaveBeenCalled()
+    expect(h.runtime.store.settings().sources['dsh-new']?.config).toMatchObject({ bindingId: 'user', principalId: 'voice-user' })
+  } finally { accounts.mockRestore() }
+})
 
 it('accepts only authenticated bound human origins, freezes IDs and persists queryable receipts without starting work', async () => {
   const request = handoff('first')

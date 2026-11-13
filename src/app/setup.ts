@@ -16,7 +16,8 @@ export interface SetupHost {
 }
 
 const setupFields = (settings: Settings) =>
-  JSON.stringify(Object.entries(settings.sources).map(([id, value]) => [id, (SETUP_FIELDS[sourceKind(id) ?? ''] ?? []).map(key => value.config[key] ?? '')]
+  JSON.stringify(Object.entries(settings.sources).filter(([id]) => SETUP_FIELDS[sourceKind(id) ?? ''] !== undefined)
+    .map(([id, value]) => [id, SETUP_FIELDS[sourceKind(id)!]!.map(key => value.config[key] ?? '')]
   ).sort(([a], [b]) => String(a).localeCompare(String(b))))
 export const setupChanged = (before: Settings, after: Settings): boolean => setupFields(before) !== setupFields(after)
 
@@ -79,6 +80,8 @@ export class Setup {
       })
       return
     }
+    // Other Sources (including Voice) have no GitHub account to probe.
+    if (sourceKind(id) !== 'github') return
     const config = settings.sources[id]?.config ?? {}
     // A further instance inherits the shared CLI when it names none; it may not introduce another account or CLI.
     const declared = typeof config.cli === 'string' && config.cli ? config.cli : undefined
