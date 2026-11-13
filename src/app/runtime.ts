@@ -113,10 +113,17 @@ export class Runtime extends Service implements SourceHost {
           .catch(() => { /* sync() records its failure in health. */ })
         return () => {}
       })
+      const sourceAvailable = (trigger: Trigger) => !!sources.kind(trigger.source)
+        && !!sources.instance(trigger.source)?.enabled && sources.scope(trigger).listened
       const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime }
       const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
       const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
       const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, context: ctx,
+        sourceRead: (trigger, path, signal) => sources.readOriginal(trigger, path, signal),
+        sourceTargetAllowed: (trigger, ticket) => sources.targetAllowed(trigger, ticket, store.triggers.get(ticket.origin.triggerId)),
+        sourceRoutingSources: trigger => sources.routingSources(trigger),
+        sourceActive: trigger => sourceAvailable(trigger) && !!allowedSender(store.settings(), trigger.actor),
+        sourceAvailable,
         promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
         feishuPageSize: () => feishuSettings(sources).readPageSize, sourceLink: link }
       const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,

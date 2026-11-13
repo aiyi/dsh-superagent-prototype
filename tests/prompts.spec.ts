@@ -95,7 +95,7 @@ it('rejects unknown keys, built-in skill names and oversized configuration befor
     const prompts = promptsOf(store)
     expect(() => prompts.save({ ...defaultPrompts(), shared: 'x' }, 0, 'panel')).toThrow()
     expect(() => prompts.save({ communication: '', scope: '' }, 0, 'panel')).toThrow()
-    for (const name of ['github', 'feishu']) expect(() => prompts.save({ ...defaultPrompts(), skills: { [name]: 'mine' } }, 0, 'panel')).toThrow('built-in skill')
+    for (const name of ['github', 'feishu', 'dsh']) expect(() => prompts.save({ ...defaultPrompts(), skills: { [name]: 'mine' } }, 0, 'panel')).toThrow('built-in skill')
     expect(() => prompts.save({ ...defaultPrompts(), skills: { 'Bad Name': 'x' } }, 0, 'panel')).toThrow()
     expect(() => promptsOf(store, 1000).save(defaultPrompts(), 0, 'panel')).toThrow('exceeds')
     expect(prompts.current().revision).toBe(0)
@@ -116,10 +116,10 @@ it('registers the built-in Source skills, Feishu only with a Feishu bot, before 
   withStore(store => {
     const config = { ...defaultPrompts(), skills: { release: 'Tag releases.' } }
     const skills = promptsOf(store).skills(config)
-    expect(skills.map(([name]) => name)).toEqual(['feishu', 'github', 'release'])
+    expect(skills.map(([name]) => name)).toEqual(['feishu', 'github', 'dsh', 'release'])
     expect(skills[1]![1]).toContain('## CLI usage')
-    expect(skills[2]![1]).toBe('Tag releases.')
-    expect(new Prompts(store, () => 100000, variables, () => false).skills(config).map(([name]) => name)).toEqual(['github', 'release'])
+    expect(skills[3]![1]).toBe('Tag releases.')
+    expect(new Prompts(store, () => 100000, variables, () => false).skills(config).map(([name]) => name)).toEqual(['github', 'dsh', 'release'])
   })
 })
 

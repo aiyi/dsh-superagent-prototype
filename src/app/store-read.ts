@@ -1,11 +1,18 @@
 /** Read-only Store queries for views, tools, and Source polling. */
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite'
-import type { Decision, Thread, Trigger } from '../core/index.ts'
+import type { Decision, Thread, Ticket, Trigger } from '../core/index.ts'
 import type { Dropped, Receipt, TimelinePlace } from './store.ts'
 
 export function storeReads(db: DatabaseSync) {
   const values = <T>(sql: string, ...parameters: SQLInputValue[]): T[] => db.prepare(sql).all(...parameters).map(row => JSON.parse(String(row.value)) as T)
   return {
+  /** Indexed origin/actor lookup includes ended tickets and never materializes the whole ticket store. */
+  routingTickets: (source: string, actor: string, shared: string[] = [], offset = 0, limit = 20): { items: Ticket[]; more: boolean } => {
+    const extra = shared.length ? ` OR source IN (${shared.map(() => '?').join(',')})` : ''
+    const rows = values<Ticket>(`SELECT value FROM ticket
+      WHERE (source = ? AND actor = ?)${extra} ORDER BY rowid DESC LIMIT ? OFFSET ?`, source, actor, ...shared, limit + 1, offset)
+    return { items: rows.slice(0, limit), more: rows.length > limit }
+  },
   /** Newest first by arrival (`rowid`) order rather than trigger timestamp. */
   recentTriggers: (offset = 0, limit = 50): Trigger[] => db.prepare('SELECT value FROM trigger ORDER BY rowid DESC LIMIT ? OFFSET ?').all(limit, offset).map(row => JSON.parse(String(row.value)) as Trigger),
   /** Per-source trigger counts since `since`, plus the latest arrival timestamp across all time. */

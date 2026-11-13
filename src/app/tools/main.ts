@@ -13,6 +13,8 @@ import type { Sessions } from '../sessions.ts'
 import type { Settings } from '../settings.ts'
 import type { Store } from '../store.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
+import { dshRoute } from '../dsh-routing.ts'
+import { isDshSource } from '../../sources/dsh-protocol.ts'
 
 const RoutingNoteSchema = z.string().trim()
   .refine(text => wordCount(text) <= NOTE_WORDS, `Routing note must not exceed ${NOTE_WORDS} words (Chinese uses word segmentation). Shorten it; do not split it across deliveries.`)
@@ -20,7 +22,7 @@ const RoutingNoteSchema = z.string().trim()
 export interface MainToolsHost {
   readonly context: Context
   readonly engine: Pick<EngineForMainSession, 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'> & EngineForPeople
-  readonly store: Pick<Store, 'tickets' | 'triggers' | 'threads' | 'atomic' | 'replyStatus' | 'settings'>
+  readonly store: Pick<Store, 'tickets' | 'triggers' | 'threads' | 'atomic' | 'replyStatus' | 'settings' | 'get' | 'set'>
   readonly prompts: Pick<Prompts, 'preview' | 'save'>
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery' | 'modelRetry'>
   readonly settings: Pick<Settings, 'view' | 'block' | 'save' | 'pause' | 'sync'>
@@ -86,7 +88,7 @@ function invalid(item: RouteItem): string | undefined {
   }
   return undefined
 }
-type Routed = { decision?: DecisionKind; reason: string; ticketId?: string | undefined; triggerIds?: readonly string[] }
+type Routed = { decision?: DecisionKind; reason: string; ticketId?: string | undefined; triggerIds?: readonly string[]; reused?: true }
 /**
  * Carry out one routing decision as its Engine command, in a transaction of its own. `decided` holds the Triggers that this
  * call's earlier items decided, with their batches.
@@ -146,11 +148,22 @@ function routeTool(host: MainToolsHost): Tool {
         const problem = invalid(item)
         if (problem) return { ...head, refused: problem }
         try {
-          const result = route(host, item, decided)
+          const trigger = host.store.triggers.get(item.trigger_id)
+          if (trigger && isDshSource(trigger.source) && host.resources.sourceActive?.(trigger) !== true) {
+            return { ...head, refused: 'The Voice source or principal is no longer admitted' }
+          }
+          if (trigger && isDshSource(trigger.source) && ['attach', 'stop'].includes(item.kind)) {
+            const target = item.ticket_id ? host.store.tickets.get(item.ticket_id) : undefined
+            if (!target || host.resources.sourceTargetAllowed?.(trigger, target) !== true) {
+              return { ...head, refused: 'The target ticket is outside this Voice binding' }
+            }
+          }
+          const result = dshRoute(host.store, item, () => route(host, item, decided))
           if ('refused' in result) return { ...head, ...result }
           for (const id of result.triggerIds ?? []) if (!decided.has(id)) decided.set(id, item.trigger_id)
           const ticket = result.ticketId ? host.store.tickets.get(result.ticketId) : undefined
           return { ...head, ...(result.decision ? { decision: result.decision } : {}), reason: result.reason,
+            ...(result.reused ? { reused: true } : {}),
             ...(ticket ? { ticket: ticketCard(ticket) } : {}) }
         } catch (error) {
           if (error instanceof UserError) return { ...head, refused: error.message }
@@ -234,15 +247,21 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
     }),
     tool({
       name: 'orchestrator_reply',
-      description: `Send an answer to a human question, a ready result, or attention requiring human action, as the replies section says; the gate refuses anything else, such as progress. purpose=result needs a ticket in person/review after a ready report, a completed or merged one, or a dropped one whose matched rule asks for a closing message. IM limit: ${IM_WORDS} words.`,
+      description: `Send an answer (including pre-ticket clarification/refusal), a verified result, attention, or status for a human stop or failed/blocked report. Routine progress is refused. IM limit: ${IM_WORDS} words.`,
       schema: z.object({
         trigger_id: z.string().optional().describe('The original human question, for an answer only.'),
         ticket_id: z.string().optional(),
-        purpose: z.enum(['answer', 'result', 'attention']),
+        purpose: z.enum(['answer', 'result', 'attention', 'status']),
         human_action: z.string().trim().min(1).optional().describe('Required for attention: the ticket\'s current attention question.'),
         text: z.string().min(1).max(20000),
       }).strict(),
       execute: async args => {
+        if (args.ticket_id && args.trigger_id) {
+          const trigger = host.store.triggers.get(args.trigger_id), target = host.store.tickets.get(args.ticket_id)
+          if (trigger && isDshSource(trigger.source) && (!target || host.resources.sourceTargetAllowed?.(trigger, target) !== true)) {
+            throw new Error('The reply target is outside this Voice binding')
+          }
+        }
         const reply = host.engine.reply({ purpose: args.purpose, text: args.text, ...(args.trigger_id ? { triggerId: args.trigger_id } : {}),
           ...(args.ticket_id ? { ticketId: args.ticket_id } : {}), ...(args.human_action ? { question: args.human_action } : {}) })
         await host.sendReplies()

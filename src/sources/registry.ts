@@ -1,5 +1,5 @@
 /** Registry of installed Source kinds, their configured instances, and the Engine's SourceScope implementation. */
-import type { ChannelRef, OutboundMessage, ScopeResult, SourceScope, Trigger } from '../core/index.ts'
+import type { ChannelRef, OutboundMessage, ScopeResult, SourceScope, Ticket, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import { HealthBoard, type HealthEntry } from '../infra/health.ts'
 import { sameName } from '../infra/text.ts'
@@ -130,6 +130,26 @@ export class SourceRegistry implements SourceScope {
     const instance = this.instance(channel.source, settings)
     return !!instance?.enabled && (kind.channel?.allowed?.(channel.address, instance.config) ?? true)
   }
+  /** Describes a source's original resources without fetching or scanning conversation history. */
+  originalReference(trigger: Trigger): Record<string, unknown> | undefined {
+    const instance = this.instance(trigger.source), kind = this.kind(trigger.source)
+    return instance?.enabled ? kind?.original?.reference(trigger, instance.config) : undefined
+  }
+  /** Reads a bounded original resource; caller/ticket authorization is enforced by the application resource dispatcher. */
+  async readOriginal(trigger: Trigger, path: string, signal?: AbortSignal): Promise<unknown> {
+    const instance = this.instance(trigger.source), kind = this.kind(trigger.source)
+    if (!instance?.enabled || !kind?.original) throw new Error('Original source is unavailable')
+    return kind.original.read(trigger, path, instance.config, signal)
+  }
+  /** Enforces optional source-owned routing boundaries without turning the Source into a semantic router. */
+  targetAllowed(trigger: Trigger, ticket: Ticket, origin?: Trigger): boolean {
+    const kind = this.kind(trigger.source), instance = this.instance(trigger.source)
+    return !!kind && !!instance?.enabled && (!kind.targetAllowed || kind.targetAllowed(trigger, ticket, origin, instance.config))
+  }
+  routingSources(trigger: Trigger): string[] {
+    const instance = this.instance(trigger.source)
+    return instance?.enabled ? this.kind(trigger.source)?.routingSources?.(trigger, instance.config) ?? [] : []
+  }
   /** Environment variable declarations for every installed kind, whether enabled or disabled. */
   declarations(): { kind: string; variables: readonly VariableSpec[] }[] {
     return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => kind.environment ? [{ kind: kind.kind, variables: kind.environment.variables }] : [])
@@ -150,7 +170,8 @@ export class SourceRegistry implements SourceScope {
     const kind = this.kind(message.channel.source)
     if (!kind) return 'waiting'
     const bound = this.bind(commands, message.channel.source)
-    return kind.channel ? kind.channel.send({ commands: bound }, message) : 'gone'
+    const instance = this.instance(message.channel.source)
+    return kind.channel && instance ? kind.channel.send({ commands: bound }, message, instance.config) : 'gone'
   }
   link(channel: ChannelRef, links: ChannelLinks): ChannelLink {
     const repository = links.repositories?.[channel.source]

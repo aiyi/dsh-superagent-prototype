@@ -8,6 +8,7 @@ import { triggerMessage } from '../executor/dsh.ts'
 import { relatedTickets, ticketCard, triggerCard } from './cards.ts'
 import type { Store } from './store.ts'
 import type { TextCache } from './cache.ts'
+import { isDshSource } from '../sources/dsh-protocol.ts'
 
 export interface LinkHost {
   readonly store: Pick<Store, 'settings' | 'triggers' | 'threads' | 'tickets'>
@@ -18,7 +19,9 @@ export interface LinkHost {
 }
 
 /** Resolves and caches a trigger's external message URL, falling back to a readable resource path when lookup fails. */
-export async function sourceLink(host: LinkHost, trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }> {
+export async function sourceLink(host: LinkHost, trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string; source_context?: Record<string, unknown> }> {
+  const original = host.sources.originalReference(trigger)
+  if (original) return { source_context: original }
   if (trigger.url) return { source_url: trigger.url }
   const ref = feishuRef(trigger)
   if (!ref) return {}
@@ -49,7 +52,8 @@ function referencedTickets(host: LinkHost, trigger: Trigger, known: readonly Tic
   const threads = (trigger.text.match(/#\d+|https?:\/\/[^\s)>\]]+/g) ?? []).flatMap(reference => host.sources.find(reference).threads)
   const ids = new Set(threads.flatMap(thread => host.store.threads.get(thread)?.subscriptions ?? []))
   for (const ticket of known) ids.delete(ticket.id)
-  return [...ids].flatMap(id => host.store.tickets.get(id) ?? []).slice(0, 4)
+  return [...ids].flatMap(id => host.store.tickets.get(id) ?? []).filter(ticket => !isDshSource(trigger.source)
+    || host.sources.targetAllowed(trigger, ticket, host.store.triggers.get(ticket.origin.triggerId))).slice(0, 4)
 }
 /** Builds the main Session's candidate card with routing metadata, handback history, and related or referenced tickets. */
 export async function candidateCard(host: LinkHost, candidate: Candidate) {
@@ -64,7 +68,8 @@ export async function candidateCard(host: LinkHost, candidate: Candidate) {
   const others = candidate.triggers.filter(trigger => trigger.id !== primary.id)
   return { ...triggerMessage(primary, await sourceLink(host, primary), undefined, repliedTo(host, primary)), strength: candidate.strength,
     mode: settings.eval.mode, ...others.length ? { batch: others.map(trigger => triggerCard(trigger)) } : {},
-    ...handedBack.length ? { handed_back: handedBack } : {}, ...relatedTickets(candidate.tickets),
+    ...handedBack.length ? { handed_back: handedBack } : {}, ...relatedTickets(candidate.tickets.filter(ticket => !isDshSource(primary.source)
+      || host.sources.targetAllowed(primary, ticket, host.store.triggers.get(ticket.origin.triggerId)))),
     ...(delivered.length ? { delivered_to: delivered } : {}), ...(referenced.length ? { referenced_tickets: referenced.map(ticketCard) } : {}),
     next_action: candidate.strength === 'explicit' ? 'Route it with orchestrator_route as dispatch says: accept, attach, stop or ignore.'
       : 'Ignore it with orchestrator_route if the card shows it touches no enabled rule; else assess it with orchestrator_eval, orchestrator_eval_read, then orchestrator_eval_decide.' }

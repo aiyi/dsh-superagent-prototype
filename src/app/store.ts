@@ -29,11 +29,15 @@ export interface SettingsVersion {
  */
 const SETS: Record<string, Record<string, string>> = {
   ticket: {
+    origin: "TEXT AS (value ->> '$.origin.triggerId')",
+    source: "TEXT AS (value ->> '$.mandate.actor.source')",
+    actor: "TEXT AS (value ->> '$.mandate.actor.id')",
     open: "INTEGER AS (CASE WHEN value -> '$.ended' IS NULL THEN 1 END)",
     // Only the latest assignment can be pending or running because the Engine closes one before adding the next.
     active: `INTEGER AS (CASE WHEN json_array_length(value, '$.undelivered') > 0
       OR value ->> '$.assignments[#-1].state' IN ('pending', 'running') THEN 1 END)`,
   },
+  trigger: { source: "TEXT AS (value ->> '$.source')", actor: "TEXT AS (value ->> '$.actor.id')" },
   thread: {
     active: "INTEGER AS (CASE WHEN json_array_length(value, '$.pending') > 0 OR value -> '$.evaluating' IS NOT NULL THEN 1 END)",
     subscribed: "TEXT AS (CASE WHEN json_array_length(value, '$.subscriptions') > 0 THEN value ->> '$.ref.source' END)",
@@ -117,6 +121,7 @@ export class Store implements Repositories {
       }
     }
     if (!columns('effect').has('generation')) this.db.exec('ALTER TABLE effect ADD COLUMN generation INTEGER NOT NULL DEFAULT 0')
+    this.db.exec('CREATE INDEX IF NOT EXISTS ticket_source_actor ON ticket(source, actor)')
   }
   /** Closes the underlying SQLite database connection. */
   close(): void { this.db.close() }
@@ -273,11 +278,11 @@ export class Store implements Repositories {
      */
     settle: (message: OutboundMessage, outcome: 'sent' | DropReason): void => {
       const settled = outcome === 'sent' ? { status: 'sent' } : { status: 'dropped', dropped: { at: new Date().toISOString(), reason: outcome } }
-      const { id, channel, text, kind, ticketId } = message
+      const { id } = message
       const updated = this.db.prepare("UPDATE outbox SET value = json_patch(value, ?) WHERE id = ? AND value ->> '$.status' = 'pending'")
         .run(JSON.stringify(settled), id)
       if (!Number(updated.changes)) this.db.prepare('INSERT OR IGNORE INTO outbox (id, value) VALUES (?, ?)')
-        .run(id, JSON.stringify({ id, channel, text, kind, ...ticketId ? { ticketId } : {}, ...settled }))
+        .run(id, JSON.stringify({ ...message, ...settled }))
     },
     /**
      * Withdraws a pending message that has not yet been sent.

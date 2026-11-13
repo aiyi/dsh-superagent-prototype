@@ -74,7 +74,7 @@ Callers receive only their role's `Pick` of the Engine: `EngineForSources`, `Eng
 | Main Session | `attach(ticketId, triggerId, note?)` | Routes a Trigger to a Ticket it points at, whose Executor then decides it as a follow-up, and ends the Eval that holds it, whose other Triggers wait for a fresh Eval; an ended Ticket resumes under its Mandate at once unless processing is paused. A follow-up an Executor still decides is refused, as is one routed back to the Ticket that handed it back |
 | Main Session | `requestStatus(ticketId)` | Asks a waiting Executor Session for its status, and answers whether it asked |
 | Main Session | `note(ticketId, text)` | Gives a Ticket's Executor a fact from other work as a text Input, which grants nothing |
-| Main Session, Executor | `reply(request)` | Queues a message for the Channel its purpose names: `acknowledgement`, `answer`, `result` or `attention` |
+| Main Session, Executor | `reply(request)` | Queues a message for the Channel its purpose names: `acknowledgement`, `answer`, `result`, `attention` or guarded `status` |
 | People | `stopTicket(ticketId, reason?)` | A person's stop, which withdraws the Mandate |
 | People | `retryTicket(ticketId)` | Ends the stalled Assignment of a Ticket that waits for a person after a `failed` or `blocked` Report, or whose Input delivery failed (`canRetry`), and starts a new one |
 | People | `reevaluate(triggerId)` | Queues a stored Trigger for a fresh Eval |
@@ -182,7 +182,7 @@ Each kind has a health entry under its name. It reports an error once one of its
 
 ### Sources
 
-Sources extend the host through `SourceKind`, defined in `src/sources/kind.ts`. A kind declares its identity, title, description, configuration `schema` and `fields`, derived `facts`, and `health` entries. Optional behavior includes `scope`, a `channel` (`allowed`, `send`, `link`), `threadContext`, `find`, `policy`, `environment` and `refreshLabels`.
+Sources extend the host through `SourceKind`, defined in `src/sources/kind.ts`. A kind declares its identity, title, description, configuration `schema` and `fields`, derived `facts`, and `health` entries. Optional behavior includes `scope`, a `channel` (`allowed`, `send`, `link`), `threadContext`, `original` resources, `targetAllowed`/`routingSources`, `find`, `policy`, `environment` and `refreshLabels`.
 
 `SourceRegistry` (`registry.ts`) owns registered kinds and their `<kind>` or `<kind>-<name>` instances, and implements the Engine's `SourceScope`. Registration claims the default instance's health entries on `HealthBoard`; a further instance claims `<name>:<instance id>` on first use, duplicate declared claims and reserved `sync:` names are refused. A SourceContext writes only through its instance's entries, so reports after unregistration do nothing.
 
@@ -282,7 +282,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 - Runtime sends `pullEndNotices` for merged or closed Tickets.
 - Executor tools bind reported pull requests with `readPull` and `claimPull`, using the GitHub context exposed by Runtime.
 - MasterAssessor reads repository files with `readRepositoryPath`.
-- Sessions and Prompts register built-in skills only for GitHub and Feishu. Migration converts their schema-10 records.
+- Sessions and Prompts register built-in skills for GitHub, Feishu and DSH Voice. Migration converts their schema-10 records.
 - Setup probes only GitHub and Feishu account fields (`SETUP_FIELDS`). Only those Sources receive account setup problems through `SourceContext.problem`.
 
 
@@ -316,6 +316,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/runtime.ts` | The Runtime, the composition root, with its start and stop |
 | `src/app/setup.ts` | Setup, per-instance setup problems, and `setupChanged`, whether a save changes an instance or a field setup reads |
 | `src/app/passes.ts` | Passes, the pass scheduler |
+| `src/app/dsh-routing.ts` | Transactional DSH command receipts that distinguish retries from new human continuations |
 | `src/app/outbox.ts` | The Outbox: the Engine's `Outbox` port, the receipts and the `reply` effects that send them |
 | `src/app/notices.ts` | The main Session's notices and relays: `eventNotice`, `reportRelay`, `resultRelay` and `followupRelay` |
 | `src/app/store.ts` | The Store, and `Receipt`, a message of the outbox |
@@ -358,6 +359,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/infra/paths.ts` | The package's root, where packaged files are |
 | `src/infra/text.ts` | Word counts and the chat message limit, `fill` and `sameName` |
 | `src/infra/health.ts` | The `HealthBoard`, every part's health entry, each claimed by its one writer |
+| `src/sources/dsh.ts` | Optional authenticated loopback DSH Source, atomic handoff ingestion, dialogue resources and Channel delivery |
+| `src/sources/dsh-protocol.ts` | Exported strict version-1 handoff, dialogue, history and reply contracts |
+| `src/sources/dsh-transport.ts` | Private credentials, fixed loopback transport, bounded responses and concurrent history-read limits |
 | `src/sources/kind.ts` | The `SourceKind` protocol |
 | `src/sources/registry.ts` | `SourceRegistry`: installed kinds, their `<kind>` or `<kind>-<name>` instances, validation, Policy parts, per-instance health, Channels and Thread context |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
@@ -417,6 +421,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/bundle-patch.spec.ts` | The bundle's patch, read as DeepSeek Harness reads it, and the agent preset of Executor Sessions it defines |
 | `tests/effects.spec.ts` | The effect queue: coalescing, limits, retries with backoff, health and shutdown |
 | `tests/passes.spec.ts` | Passes: one at a time, the ones asked for during a pass run as one after it, and the runtime health a failed pass reports |
+| `tests/dsh-source.spec.ts` | DSH HTTP/SQLite contract, provenance filtering, history limits, scoped ended-work routing, transactional receipts and lost-ack recovery |
 | `tests/outbox.spec.ts` | The Outbox on a running Runtime: messages wait while processing is paused or their Source is not installed |
 | `tests/cache.spec.ts` | `TextCache` |
 | `tests/queue.spec.ts` | The Runtime's work through the effect queue, and what earlier versions stored |

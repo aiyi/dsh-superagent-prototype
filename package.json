@@ -16,6 +16,8 @@
     "./client": "./lib/client.js",
     "./github-watch": "./lib/github-watch.js",
     "./feishu-watch": "./lib/feishu-watch.js",
+    "./dsh-source": "./lib/dsh-source.js",
+    "./dsh-protocol": "./lib/dsh-protocol.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },

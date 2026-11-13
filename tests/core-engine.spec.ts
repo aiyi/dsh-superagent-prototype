@@ -121,7 +121,8 @@ describe('eval', () => {
     expect(ticket).not.toHaveProperty('ended')
     expect(ticket.assignments).toEqual([expect.objectContaining({ state: 'running', startedAt: expect.any(String) })])
     expect(h.repo.threads.get('chat:t1')?.subscriptions).toEqual([ticket.id])
-    expect(h.outbox).toEqual([{ id: key('ack', '1'), channel: trigger('1').channel, text: 'ok', kind: 'acknowledgement', ticketId: ticket.id }])
+    expect(h.outbox).toEqual([{ id: key('ack', '1'), channel: trigger('1').channel, text: 'ok', kind: 'acknowledgement', ticketId: ticket.id,
+      context: { purpose: 'acknowledgement', triggerId: '1', ticketTitle: 'Fix' } }])
     expect(h.executor.start).toHaveBeenCalledOnce()
   })
   it('refuses to decide an eval that a later eval replaced, and decides the later one', async () => {

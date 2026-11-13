@@ -1,7 +1,7 @@
 /** SourceKind plugin contract: configuration schema, UI form fields, policy integration, channel adapter, and thread context reader. */
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { z } from 'zod'
-import type { OutboundMessage, ScopeResult, Trigger } from '../core/index.ts'
+import type { OutboundMessage, ScopeResult, Ticket, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SourceContext, SourceHost } from './host.ts'
@@ -50,7 +50,7 @@ export interface SourceChannel<C> {
    * Sends a message idempotently by ID; returns `'gone'` when the target conversation no longer accepts replies.
    * @throws when delivery failed but may succeed on a later retry.
    */
-  send(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'>
+  send(host: Pick<SourceContext, 'commands'>, message: OutboundMessage, config: C): Promise<'sent' | 'gone'>
   /** Returns the URL and label for `address`; `url` is empty when `links` lack the required deployment info. */
   link(address: Record<string, string>, links: ChannelLinks): ChannelLink
 }
@@ -100,6 +100,15 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   channel?: SourceChannel<C>
   /** Bounded context reader for assessments; assessments of a kind without `threadContext` read none. */
   threadContext?: ThreadContext<C>
+  /** Original-source resources shared by explicit routing and authorized workers, independent of proactive Eval reads. */
+  original?: {
+    reference(trigger: Trigger, config: C): Record<string, unknown>
+    read(trigger: Trigger, path: string, config: C, signal?: AbortSignal): Promise<unknown>
+  }
+  /** Additional target boundary for a source's routing commands; the application enforces it before attach or stop. */
+  targetAllowed?(trigger: Trigger, ticket: Ticket, origin: Trigger | undefined, config: C): boolean
+  /** Source instances explicitly shared into this binding's candidate search; never inferred from actor names. */
+  routingSources?(trigger: Trigger, config: C): string[]
   /** Maps a search query to candidate Thread keys for one Source instance (`source` is its instance id) and Trigger search terms (such as a Feishu `om_` ID). */
   find?(query: string, source: string): { threads: string[]; terms: string[] }
   /** Returns the ID of the Trigger whose message this Trigger replies to, when derivable without a network read. */

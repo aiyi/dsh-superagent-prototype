@@ -19,6 +19,7 @@ import type { Settings } from './settings.ts'
 import { KV } from '../kv.ts'
 import type { Store } from './store.ts'
 import type { TextCache } from './cache.ts'
+import { dshHandoff, isDshSource } from '../sources/dsh-protocol.ts'
 
 /** Resource descriptors exposed via orchestrator_read, marking which resources worker sessions may also read for their own ticket. */
 export const RESOURCES: readonly { name: string; holds: string; executor?: true }[] = [
@@ -52,6 +53,7 @@ export const RESOURCES: readonly { name: string; holds: string; executor?: true 
   { name: 'models/<provider>', holds: 'one provider\'s models' },
   { name: 'feishu/<trigger-id>/…', holds: 'a Feishu original, as the dsh-superagent-feishu skill describes', executor: true },
   { name: 'github/…', holds: 'a GitHub original, as the dsh-superagent-github skill describes', executor: true },
+  { name: 'dsh/<trigger-id>/…', holds: 'original filtered Voice dialogue (message/context), or source-scoped ticket candidates (main Session only)', executor: true },
 ]
 export const resourceGrammar = (executor: boolean): string => RESOURCES.filter(resource => !executor || resource.executor)
   .map(resource => `${resource.name}: ${resource.holds}`).join('; ')
@@ -68,6 +70,11 @@ export interface ResourceHost {
   mayRead(sessionId: string, revision: number): boolean
   feishuPageSize(): number
   sourceLink(trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }>
+  sourceRead?(trigger: Trigger, path: string, signal?: AbortSignal): Promise<unknown>
+  sourceTargetAllowed?(trigger: Trigger, ticket: Ticket): boolean
+  sourceRoutingSources?(trigger: Trigger): string[]
+  sourceActive?(trigger: Trigger): boolean
+  sourceAvailable?(trigger: Trigger): boolean
 }
 export interface MainResourceHost extends ResourceHost {
   readonly sessions: Pick<Sessions, 'status' | 'modelRetry'>
@@ -91,8 +98,11 @@ function list<T>({ offset, limit }: Read, fetch: (offset: number, count: number)
   return { items: items.slice(0, size), next_offset: items.length > size ? offset + size : null }
 }
 /** Check whether a worker session's ticket is authorized to read a trigger (via delivery, ticket origin, or followed thread). */
-const readable = (host: ResourceHost, ticket: Ticket, trigger: Trigger): boolean => reached(ticket, trigger, key => host.store.threads.get(key))
-  || ticket.origin.triggerIds.includes(trigger.id) || trigger.threads.some(ref => ticket.follows?.some(follow => follow.thread === threadKey(ref)))
+const readable = (host: ResourceHost, ticket: Ticket, trigger: Trigger): boolean => isDshSource(trigger.source)
+  ? ticket.origin.triggerId === trigger.id || !!host.store.triggers.disposition(trigger.id)?.fanout.includes(ticket.id)
+    || trigger.threads.some(ref => host.store.threads.get(threadKey(ref))?.subscriptions.includes(ticket.id))
+  : reached(ticket, trigger, key => host.store.threads.get(key)) || ticket.origin.triggerIds.includes(trigger.id)
+    || trigger.threads.some(ref => ticket.follows?.some(follow => follow.thread === threadKey(ref)))
 const trigger = (host: ResourceHost, id: string, ticketId?: string): Trigger => {
   const found = host.store.triggers.get(id)
   if (!found) throw new UserError('unknownTrigger')
@@ -104,7 +114,7 @@ const trigger = (host: ResourceHost, id: string, ticketId?: string): Trigger => 
 async function sourcePage(read: Read, source: string, fetch: () => Promise<unknown>) {
   const { host, resource, offset, sessionId } = read
   const body = offset === 0 ? JSON.stringify(await fetch()) : host.pages.get(`${sessionId}:${resource}`)
-  if (body === undefined) throw new Error(`Read this ${source === 'feishu' ? 'Feishu' : 'GitHub'} resource from offset 0 first`)
+  if (body === undefined) throw new Error(`Read this ${source === 'feishu' ? 'Feishu' : source === 'dsh' ? 'DSH' : 'GitHub'} resource from offset 0 first`)
   if (offset === 0) host.pages.set(`${sessionId}:${resource}`, body)
   return text(read, body)
 }
@@ -116,6 +126,22 @@ async function transcript(host: ResourceHost, ticketId: string) {
 }
 
 const ROUTES: readonly Route[] = [
+  ['dsh/', async read => {
+    const [id, part, cursor, ...extra] = read.rest.split('/')
+    if (!id || !part || extra.length) throw new Error('Unknown DSH resource')
+    const source = trigger(read.host, id, read.ticketId)
+    dshHandoff(source)
+    if (read.host.sourceAvailable?.(source) !== true) throw new Error('Voice source is no longer available')
+    if (part === 'tickets') {
+      if (read.ticketId || cursor) throw new Error('DSH ticket candidates belong to the main Session')
+      const host = main(read), page = host.store.read.routingTickets(source.source, source.actor.id,
+        host.sourceRoutingSources?.(source) ?? [], read.offset, Math.min(read.limit ?? 20, 50))
+      return { items: page.items.filter(ticket => host.sourceTargetAllowed?.(source, ticket) !== false).map(ticketCard),
+        next_offset: page.more ? read.offset + page.items.length : null }
+    }
+    if (!read.host.sourceRead) throw new Error('Original source reader is unavailable')
+    return sourcePage(read, 'dsh', () => read.host.sourceRead!(source, [part, ...(cursor ? [cursor] : [])].join('/'), read.signal))
+  }],
   ['tickets', read => {
     const host = main(read), tickets = host.store.tickets.list()
     const card = (ticket: Ticket) => ({ ...ticketCard(ticket), ...host.sessions.modelRetry(runningAssignment(ticket) && workerSessionId(ticket.id)) })
