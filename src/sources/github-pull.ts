@@ -47,6 +47,7 @@ const AUTO_MERGE_ON: ThreadFact = { label: { zh: '自动合并', en: 'Auto-merge
 export function claimPull(ctx: SourceContext, ticketId: string, pr: Pull): string | undefined {
   const ticket = ctx.tickets.get(ticketId)
   if (!ticket || !liveTicket(ticket)) return 'Ticket ended because its PR was closed'
+  if (ticket.execution?.workspaceOnly) return 'This ticket has no repository, so it cannot own a pull request'
   const source = ctx.id, repository = ctx.commands.repository
   const trigger = ctx.triggers.get(ticket.origin.triggerId)
   const started = trigger?.source === source && trigger.meta.isPr === true && trigger.meta.number === pr.number

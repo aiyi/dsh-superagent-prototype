@@ -29,8 +29,8 @@ export function declaredVariables(sources: SourceRegistry, settings?: Settings):
  * instance whose repository is the Ticket's; otherwise the default instance.
  */
 export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: { id: string; name: string; directory: string };
-  trigger?: Trigger; repository?: string }): Variable[] {
-  const { deployment, sources, settings, ticket, trigger, repository } = input
+  trigger?: Trigger; repository?: string; workspaceOnly?: boolean }): Variable[] {
+  const { deployment, sources, settings, ticket, trigger, repository, workspaceOnly } = input
   const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '), ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id } : {} }
   const result: Variable[] = EXECUTOR_VARIABLES.filter(spec => !spec.ticket || ticket).map(spec => ({ key: spec.key, value: executor[spec.key] ?? '', description: spec.description, owner: 'executor' }))
   const active = trigger?.source
@@ -44,7 +44,7 @@ export function environmentOf(input: { deployment: Deployment; sources: SourceRe
     if (!current || score(entry.source) > score(current.source)) chosen.set(entry.kind.kind, entry)
   }
   for (const { kind, environment, config, source } of chosen.values()) {
-    const values = environment.values({ deployment, config, source, ...trigger ? { trigger } : {} })
+    const values = environment.values({ deployment, config, source, ...trigger ? { trigger } : {}, ...repository ? { repository } : {}, ...workspaceOnly ? { workspaceOnly: true } : {} })
     for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: kind.kind })
   }
   return result
@@ -53,8 +53,9 @@ export function environmentOf(input: { deployment: Deployment; sources: SourceRe
 /** Combines a ticket's fixed directory, name, and origin trigger with the deployment's current settings. */
 export function ticketEnvironment(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket: Ticket; trigger?: Trigger; repository?: string }) {
   const { ticket, trigger, repository, ...rest } = input
+  const workspaceOnly = ticket.execution?.workspaceOnly === true
   const values = { id: ticket.id, name: ticket.execution?.name ?? '', directory: ticket.execution?.directory ?? '' }
-  return environmentOf({ ...rest, ticket: values, ...trigger ? { trigger } : {}, ...repository ? { repository } : {} })
+  return environmentOf({ ...rest, ticket: values, ...trigger ? { trigger } : {}, ...repository ? { repository } : {}, ...workspaceOnly ? { workspaceOnly: true } : {} })
 }
 export function environmentLines(variables: Variable[]): string {
   return variables.map(variable => `- ${variable.key} = ${JSON.stringify(variable.value)}: ${variable.description.en}.`).join('\n')

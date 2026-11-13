@@ -1,9 +1,9 @@
 # Repository-less Tickets
 
-**Status: research and proposal. This document describes no implemented behavior and
-changes no runtime code.** It answers two questions: whether a Ticket must name a
-GitHub repository before it can be accepted, and how to remove that requirement for
-work that has nothing to do with a repository.
+**Status: implemented.** A Ticket whose work is unrelated to every configured code
+repository and needs no pull request is now accepted with `workspace_only`, gets an
+empty workspace without a checkout, and cannot own a pull request. This document
+records the problem, the options considered, and the implemented behavior.
 
 ## 1 Summary
 
@@ -13,28 +13,28 @@ instance, and a pull request binds to a Ticket by repository and branch. That is
 right model for a Ticket that changes code, opens a pull request and is delivered
 through review.
 
-Today, however, **every** accepted Ticket also gets a repository. For a GitHub
-origin the repository is derived; for any other origin the main Session must name
-one when the deployment configures several repositories, and a deployment with one
-repository silently supplies the default. The Executor then writes the repository
-into `Execution` and the worker's environment says the Ticket works on it.
+Before this change, **every** accepted Ticket also got a repository. For a GitHub
+origin the repository was derived; for any other origin the main Session had to name
+one when the deployment configured several repositories, and a deployment with one
+repository silently supplied the default. The Executor then wrote the repository
+into `Execution` and the worker's environment said the Ticket worked on it.
 
 For a summary, a research question, a piece of writing or an answer, that repository
-is only a marker. It is never used for a pull request, and a multi-repository
-deployment forces the main Session to make an arbitrary choice. The requirement is
+was only a marker. It was never used for a pull request, and a multi-repository
+deployment forced the main Session to make an arbitrary choice. The requirement was
 reasonable for repository work but not as a condition of every Ticket.
 
-The recommendation is to make **no repository** an explicit, first-class Ticket
-mode — a *workspace-only Ticket* — while keeping the repository requirement for
-repository work. Do not make an omitted repository silently mean "none": that would
-turn a forgotten choice into a hidden dead end. An explicit `workspace_only` accept
-field, stored on the Ticket, gives the main Session a safe way to accept work that
-needs no repository.
+The implemented change makes **no repository** an explicit, first-class Ticket mode
+— a *workspace-only Ticket* — while keeping the repository requirement for
+repository work. An omitted repository does not silently mean "none": that would
+turn a forgotten choice into a hidden dead end. Instead, the explicit
+`workspace_only` accept field gives the main Session a safe way to accept work that
+needs no repository, and `Execution.workspaceOnly` records it.
 
 This is a Ticket-level change. It does not enable a deployment with no GitHub
 repository at all; that is a separate product change (section 5.6).
 
-## 2 Current behavior
+## 2 Behavior before this change
 
 ### 2.1 A deployment always has a repository
 
@@ -45,38 +45,44 @@ repository at all; that is a separate product change (section 5.6).
 deployment therefore always has a default repository, even when the request that
 started a Ticket came from Feishu.
 
-### 2.2 Every accepted Ticket gets one
+### 2.2 Every accepted Ticket got one
 
 `Execution.repository` is optional in the model
-([model.ts](../src/core/model.ts)), but `DshExecutor.prepare` fills it:
+([model.ts](../src/core/model.ts)), but `DshExecutor.prepare` filled it:
 
 ```ts
 const repository = outcome.repository ?? this.host.repositoryOf(source?.source)
 ```
 
-`repositoryOf` falls back to the default repository
-([dsh.ts](../src/executor/dsh.ts), [runtime.ts](../src/app/runtime.ts)). The value is
-stored by `ticketExecution`, and GitHub's execution environment publishes it as
+`repositoryOf` fell back to the default repository
+([dsh.ts](../src/executor/dsh.ts), [runtime.ts](../src/app/runtime.ts)). The value was
+stored by `ticketExecution`, and GitHub's execution environment published it as
 `DSH_SUPERAGENT_GITHUB_REPOSITORY`
 ([execution-environment.ts](../src/app/execution-environment.ts),
 [github.ts](../src/sources/github.ts)). A Ticket accepted with no repository in a
-single-repository deployment therefore still ends up with the default one.
+single-repository deployment therefore still ended up with the default one.
+
+The implemented change keeps that fallback for legacy Tickets, and adds
+`Execution.workspaceOnly` as the explicit marker for a Ticket that has no
+repository by design.
 
 ### 2.3 The multi-repository guard
 
-Two accept paths enforce the requirement explicitly:
+Two accept paths enforced the requirement explicitly:
 
-- `orchestrator_route` with `kind: 'accept'` derives the repository from the origin
-  Source; when it has none and the deployment configures more than one repository,
-  it refuses with `accept needs repository: …`
+- `orchestrator_route` with `kind: 'accept'` derived the repository from the origin
+  Source; when it had none and the deployment configured more than one repository,
+  it refused with `accept needs repository: …`
   ([main.ts](../src/app/tools/main.ts)).
-- `orchestrator_eval_decide` has the same guard, then picks
+- `orchestrator_eval_decide` had the same guard, then picked
   `result.repository ?? derived ?? repositories[0]`
   ([assessment.ts](../src/app/assessment.ts)).
 
-So the hard "must name a repository" applies to a multi-repository deployment when
-the origin is not a GitHub repository. With one repository the default is used
-silently, which is convenient but hides the same choice.
+So the hard "must name a repository" applied to a multi-repository deployment when
+the origin was not a GitHub repository. With one repository the default was used
+silently, which was convenient but hid the same choice. The implemented
+`workspace_only` choice is the explicit alternative; the guard is otherwise
+unchanged.
 
 ### 2.4 What the repository selects
 
@@ -92,8 +98,9 @@ The repository is not just a label. It selects:
 
 That is why the constraint cannot simply be deleted for repository work: an
 unvalidated or wrong repository is a real error, and the multi-repository guard
-exists to prevent it. The defect is different: the model has no representation for
-"this Ticket needs no repository", so the system has to invent one.
+exists to prevent it. The defect was different: the model had no representation for
+"this Ticket needs no repository", so the system had to invent one. The implemented
+`workspaceOnly` marker supplies that representation.
 
 ## 3 Why the constraint exists
 
@@ -209,13 +216,13 @@ the GitHub skill). It is not needed for a summary Ticket inside a deployment tha
 also serves repositories. If the goal is “no GitHub at all”, treat it as a new
 product decision, not as part of this fix.
 
-## 6 Design sketch for C
+## 6 Implemented behavior for C
 
-The names below are illustrative; the important part is the behavior.
+The names below match the code.
 
 ### 6.1 Acceptance
 
-Add `workspace_only?: boolean` to both accept paths:
+`workspace_only?: boolean` is on both accept paths:
 
 - `orchestrator_route` accept
   ([main.ts](../src/app/tools/main.ts)).
@@ -229,28 +236,29 @@ Rules:
 - `workspace_only: true` means the Ticket needs no repository, even when the
   deployment has several and even when the origin is a GitHub repository (for
   example an Issue that asks for research).
-- When `workspace_only` is absent, current behavior is unchanged: derive the
-  repository for a GitHub origin; otherwise use the chosen repository, refuse when
-  several are configured and none is named, or use the single default.
-- The main Session decides conservatively: use `workspace_only` only when the
-  request clearly needs no repository; if the request may change code, name a
-  repository. This is a judgement call, like the title and worktree name, and the
-  prompt must say so.
+- When `workspace_only` is absent, behavior is unchanged: derive the repository for
+  a GitHub origin; otherwise use the chosen repository, refuse when several are
+  configured and none is named, or use the single default.
+- The main Session decides conservatively: it uses `workspace_only` when the
+  request clearly needs no repository; if the request may change code, it names a
+  repository. The orchestrator, admission and delivery prompts state the
+  exclusion rule: unrelated to every configured code repository, and no pull
+  request needed.
 
-The field could instead be a sentinel such as `repository: "none"`, but a boolean
+The field is a boolean rather than a sentinel such as `repository: "none"`, which
 keeps `repository` an `owner/name` field and avoids a magic value that could clash
 with a real name.
 
 ### 6.2 Ticket model and execution
 
-- `AssessmentOutcome` accept gains `workspaceOnly?: true`
+- `AssessmentOutcome` accept has `workspaceOnly?: true`
   ([ports.ts](../src/core/ports.ts)).
-- `Execution` gains `workspaceOnly?: true`
+- `Execution` has `workspaceOnly?: true`
   ([model.ts](../src/core/model.ts)); `repository` stays absent for such a Ticket.
-- `DshExecutor.prepare`:
+- `DshExecutor.prepare` uses:
 
   ```ts
-  const repository = outcome.workspaceOnly ? undefined : (outcome.repository ?? this.host.repositoryOf(source?.source))
+  const repository = workspaceOnly ? undefined : (outcome.repository ?? this.host.repositoryOf(source?.source))
   ```
 
   and `ticketExecution` stores `workspaceOnly: true`.
@@ -260,66 +268,65 @@ with a real name.
 
 ### 6.3 Execution environment
 
-- `environmentOf` / `ticketEnvironment` must know the mode and pass it to the
-  Source environment values
+- `environmentOf` / `ticketEnvironment` know the mode and pass it to the Source
+  environment values
   ([execution-environment.ts](../src/app/execution-environment.ts)).
 - For a workspace-only Ticket, `DSH_SUPERAGENT_GITHUB_REPOSITORY` is empty.
   `DSH_SUPERAGENT_GITHUB_REPOSITORIES` still lists every configured repository
   (useful context), and the account, commit email, number and PR head remain when
   the origin is GitHub.
 - The execution-environment heading already says “an empty value means that part is
-  not configured here”; the GitHub variable description should say that an empty
+  not configured here”, and the GitHub variable description now says that an empty
   repository means a workspace-only Ticket.
 
 ### 6.4 Workspace preparation
 
-Skip the repository prepare command for a workspace-only Ticket and create the
-empty directory. The command is documented as a checkout of the Ticket's
+The repository prepare command is skipped for a workspace-only Ticket and the
+directory is created empty. The command is documented as a checkout of the Ticket's
 repository ([003 Execution](003-execution.md)); running it with an empty
-`DSH_SUPERAGENT_GITHUB_REPOSITORY` would fail for the existing commands, so
-skipping is the compatible behavior. The worker still gets a directory and can
-create files, download an attachment or run commands there.
+`DSH_SUPERAGENT_GITHUB_REPOSITORY` would fail for the existing commands, so skipping
+is the compatible behavior. The worker still gets a directory and can create files,
+download an attachment or run commands there.
 
-If a deployment needs custom setup for workspace-only work, a later option is a
-separate `executor.prepareWorkspace` command, or a documented conditional:
+If a deployment needs custom setup for workspace-only work, a separate
+`executor.prepareWorkspace` command is not implemented; a documented conditional
+remains available:
 
 ```sh
 [ -n "$DSH_SUPERAGENT_GITHUB_REPOSITORY" ] || exit 0
 ```
 
-A separate command is cleaner but is additional configuration and UI; it is not
-required for the first version.
+A separate command is cleaner but is additional configuration and UI; it can be a
+later change.
 
 ### 6.5 Pull requests and delivery
 
-- `orchestrator_report` with `pr_number` must be refused for a workspace-only
-  Ticket: it cannot own a pull request. The `orchestrator_report` tool in
-  [executor.ts](../src/app/tools/executor.ts) calls `claimPull`, which validates
-  against the Ticket's repository; without a repository it currently falls back to
-  the default Source. Add an explicit guard rather than relying on that fallback.
-- `claimPull` / `observePull` must not bind a PR to a workspace-only Ticket
+- `orchestrator_report` with `pr_number` is refused for a workspace-only Ticket: it
+  cannot own a pull request. The guard sits in
+  [executor.ts](../src/app/tools/executor.ts) before any pull request read.
+- `claimPull` refuses to bind a PR to a workspace-only Ticket
   ([github-pull.ts](../src/sources/github-pull.ts)).
 - A `ready` report without a pull request already ends a Ticket as completed
   ([003 Execution](003-execution.md)), so delivery needs no new state.
 - Following a GitHub Thread for context remains possible; the Ticket still has the
   GitHub account, it just does not own a PR.
-- `readResource` for `github/…` currently falls back to the default repository when
-  a Ticket has none ([resources.ts](../src/app/resources.ts)). For a workspace-only
-  Ticket that is context, not ownership; decide whether to keep it (documented as
-  the default repository) or refuse it. Keeping it is less disruptive, but the
-  prompt must not present it as the Ticket's repository.
+- `readResource` for `github/…` still falls back to the default repository when a
+  Ticket has none ([resources.ts](../src/app/resources.ts)). For a workspace-only
+  Ticket that is context, not ownership; the prompt does not present it as the
+  Ticket's repository.
 
 ### 6.6 Prompts and panel
 
-- `prompts/orchestrator.md` currently says “A Ticket works on one repository”.
-  Change it to distinguish a repository Ticket from a workspace-only Ticket, and
-  state when to use which.
-- `prompts/admission.md` tells the main Session to name a repository or ask when
-  several are configured. Allow a workspace-only accept for requests that need no
+- `prompts/orchestrator.md` distinguishes a repository Ticket from a workspace-only
+  Ticket and says to accept `workspace_only` when the work is unrelated to any
+  repository; the accept field and the admission prompt add that it needs no pull
+  request.
+- `prompts/admission.md` allows a workspace-only accept for requests that need no
   repository, while keeping “never guess” for code work.
-- `prompts/cli.md` says a Ticket's work belongs to its own repository; qualify it.
-- `prompts/team/delivery.md` should say: if the Ticket has no repository, do not
-  open a pull request; report the result in the source conversation.
+- `prompts/cli.md` qualifies that a repository Ticket's work belongs to its own
+  repository and a workspace-only Ticket has none.
+- `prompts/team/delivery.md` says: if the Ticket has no repository, do not open a
+  pull request or claim one; report the result in the source conversation.
 - The panel does not currently show a per-Ticket repository, so no UI is required.
   If a ticket view later shows it, label the workspace-only state explicitly (such
   as “workspace only” / “无仓库”) rather than an empty string.
@@ -345,51 +352,53 @@ required for the first version.
   the default Source. Treat that as context; do not claim it is the Ticket's
   repository.
 
-## 8 Verification plan
+## 8 Verification
 
-For the implementation (not this document):
+The implementation is covered by:
 
-| Scenario | Expected |
-| --- | --- |
-| `orchestrator_route` accept with `workspace_only: true`, several repositories | Ticket is created without `execution.repository`, with `execution.workspaceOnly: true` |
-| `workspace_only: true` together with `repository` | Accept is refused |
-| `orchestrator_eval_decide` accept with `workspace_only: true` | Same outcome |
-| A GitHub-origin Ticket accepted as workspace-only | No PR binding; the origin Thread still receives replies |
-| `ticketEnvironment` for a workspace-only Ticket | `DSH_SUPERAGENT_GITHUB_REPOSITORY` is empty; `DSH_SUPERAGENT_GITHUB_REPOSITORIES` is unchanged |
-| Prepare for a workspace-only Ticket | The repository prepare command is skipped; the directory exists |
-| `orchestrator_report` with `pr_number` on a workspace-only Ticket | Refused |
-| A legacy Ticket with no `execution.repository` | Keeps the default repository in its environment |
-| Existing repository Tickets | No change |
+- `tests/tools.spec.ts`: a workspace-only accept stores `workspaceOnly: true` with
+  no repository, its environment has an empty repository, `workspace_only` plus
+  `repository` is refused, and `orchestrator_report` with `pr_number` is refused.
+- `tests/multi-repo.spec.ts`: the shared repository choice refuses a missing or
+  unconfigured repository and honours the workspace-only choice; a workspace-only
+  Ticket's environment keeps the configured repository list and empties the
+  repository value.
+- `tests/runtime.spec.ts`: a workspace-only Ticket's prepare command is skipped, its
+  directory exists and is empty, and a legacy Ticket without a stored repository
+  keeps the default repository in its environment.
+- `tests/policy.spec.ts`: an assessment with `workspace_only` produces an accept
+  with `workspaceOnly: true` and no repository.
+- The existing Source, Runtime, Registry, Command, Panel and Migration suites cover
+  the unchanged repository behavior.
 
-Doc-only changes can be checked with `pnpm exec vitest run tests/docs.spec.ts` and
-`git diff --check`.
+`pnpm check` runs the typecheck, the full test suite and the build.
 
-## 9 Open questions
+## 9 Decisions and remaining questions
 
-1. **Who decides?** The main Session is the natural place, but the prompt needs a
-   conservative rule. Should a rule or setting be able to force repository-less
-   tickets for a Source? (See option E.)
-2. **Should a workspace-only Ticket be allowed from a GitHub origin?** The
-   recommendation is yes: it is useful for research on an Issue, and the origin
-   Thread still receives the reply even though the Ticket has no PR. Confirm that a
-   GitHub Thread may legitimately produce a no-PR Ticket; if not, the guard must
-   distinguish the origin.
-3. **Should the workspace-only flag be immutable?** A follow-up that needs code
-   cannot be served by the same Ticket today. Leaving it immutable and opening a
-   new Ticket is simpler and honest.
-4. **Is a second prepare command worth it?** Only if deployments need custom
-   workspace setup beyond an empty directory.
-5. **Should the deployment itself support no GitHub repository?** Separate
-   question (section 5.6); the Ticket-level fix does not require it.
+1. **Who decides?** The main Session decides from the request, with the exclusion
+   rule in the prompt. A per-Source default (option E) is not implemented; it
+   remains a possible future setting.
+2. **A GitHub-origin workspace-only Ticket is allowed.** It is useful for research
+   on an Issue, and the origin Thread still receives the reply even though the
+   Ticket has no PR.
+3. **The flag is immutable.** A follow-up that needs code cannot be served by the
+   same Ticket; the worker reports blocked and the main Session opens a repository
+   Ticket. A future “attach repository” action is separate.
+4. **No second prepare command.** A workspace-only Ticket's directory is empty; a
+   deployment that needs custom setup can make its prepare command conditional, or
+   a `prepareWorkspace` command can be designed later.
+5. **The deployment itself still needs a GitHub repository.** A deployment with no
+   GitHub at all is a separate question (section 5.6); the Ticket-level change does
+   not require it.
 
-## 10 Recommendation
+## 10 Result
 
-Adopt option C. It removes the arbitrary marker for summary, research and writing
-Tickets without weakening the repository requirement for code work, needs no data
-migration, and is a focused change in the accept schemas, the Executor's
-preparation, the environment, the PR guard and the prompts. Keep the
-multi-repository guard for repository Tickets. Do not make an omitted repository
-mean “none” silently.
+Option C is implemented. It removes the arbitrary marker for summary, research and
+writing Tickets without weakening the repository requirement for code work, needs
+no data migration, and is a focused change in the accept schemas, the Executor's
+preparation, the environment, the PR guard and the prompts. The multi-repository
+guard remains for repository Tickets, and an omitted repository is never silently
+treated as “none”.
 
 If the product wants a larger improvement later, option E (a per-Source default or
 “none”) can reduce how often the main Session has to choose, and option F (a

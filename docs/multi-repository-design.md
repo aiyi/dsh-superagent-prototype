@@ -102,9 +102,9 @@ The core already allows a Ticket to follow several PR Threads (`follows` is a li
 
 ### 4.4 A Ticket’s repository
 
-- `Execution` gained an optional `repository` ([model.ts](../src/core/model.ts)). For a GitHub-origin Ticket it is derived from the origin Trigger’s Source instance; for an explicit routed accept it can be passed to `orchestrator_route`; for an assessed accept it can be passed to `orchestrator_eval_decide`.
-- `MasterAssessor.decide` derives a GitHub origin’s repository, rejects an unconfigured repository, and refuses an accept when several repositories are configured and the request has no origin repository and names none. The main Session is expected to ask the requester which repository, then accept with that repository.
-- Existing Tickets without `execution.repository` fall back to the default repository, so old state remains readable.
+- `Execution` gained an optional `repository` ([model.ts](../src/core/model.ts)). For a GitHub-origin Ticket it is derived from the origin Trigger’s Source instance; for an explicit routed accept it can be passed to `orchestrator_route`; for an assessed accept it can be passed to `orchestrator_eval_decide`. A Ticket whose work is unrelated to every repository and needs no pull request is accepted with `workspace_only`: it has no repository and an empty workspace instead of a checkout ([repository-less-tickets.md](repository-less-tickets.md)).
+- `MasterAssessor.decide` derives a GitHub origin’s repository, rejects an unconfigured repository, and refuses an accept when several repositories are configured and the request has no origin repository and names none. A workspace-only accept is the explicit alternative to naming one. The main Session is expected to ask the requester which repository for repository work, then accept with that repository.
+- Existing Tickets without `execution.repository` fall back to the default repository, so old state remains readable. A workspace-only Ticket is marked by `execution.workspaceOnly`, not by the absence of a repository.
 
 ### 4.5 Execution environment and prepare
 
@@ -187,7 +187,7 @@ The implementation is covered by the existing suites plus [multi-repo.spec.ts](.
 | Decision / risk | Why it matters | Current choice |
 | --- | --- | --- |
 | Multiple repositories vs one Ticket across repositories | determines whether this is a medium change or a new product feature | phase 1 is multiple repositories; cross-repository deferred |
-| Which repository a Feishu-origin or proactive Ticket uses | there is no origin GitHub instance to derive from | name it in the accept; default when only one is configured; otherwise the main Session asks instead of guessing |
+| Which repository a Feishu-origin or proactive Ticket uses | there is no origin GitHub instance to derive from | name it in the accept; default when only one is configured; otherwise the main Session asks instead of guessing, or accepts as `workspace_only` when the work needs no repository and no pull request |
 | Shared or per-repository allowlists | per-repository is safer but more setup work | per-repository; no implicit share |
 | One account or one account per repository | the worker shims expose one `gh` | one account; a further instance inherits the CLI and may not introduce another account |
 | Health granularity | one aggregate entry hides a single failing repository | per-instance entries |

@@ -50,7 +50,9 @@ Worker subagents, including nested ones, use DeepSeek Harness's `standard` prese
 
 Before the first Assignment, if the Ticket directory does not exist, the prepare command runs once with `sh` in the execution root. It has ten minutes to finish. Without a prepare command, the worker starts in an empty directory.
 
-A failed command fails the Ticket and records its output. A retry or a person's message on one of the Ticket's Threads tries preparation again. A typical command uses `git worktree` to create a checkout of the Ticket's repository, `$DSH_SUPERAGENT_GITHUB_REPOSITORY`. A pull request belongs to the Ticket when it is in that repository and its branch's last path segment matches the Ticket's short name.
+A failed command fails the Ticket and records its output. A retry or a person's message on one of the Ticket's Threads tries preparation again. A typical command uses `git worktree` to create a checkout of the Ticket's repository, `$DSH_SUPERAGENT_GITHUB_REPOSITORY`. A pull request belongs to a repository Ticket when it is in that repository and its branch's last path segment matches the Ticket's short name.
+
+A Ticket can also be workspace-only: accepted with `workspace_only` for work unrelated to every configured repository and needing no pull request. It has no repository, the prepare command is skipped, its directory starts empty, and it cannot own a pull request. Its workspace still exists and its worker writes results there or delivers them in the source conversation.
 
 ### Concurrency
 
@@ -68,13 +70,13 @@ The prepare command and Executor instructions receive the same execution variabl
 | --- | --- | --- |
 | `DSH_SUPERAGENT_DIR`, `DSH_SUPERAGENT_NAME`, `DSH_SUPERAGENT_TICKET` | Executor | The Ticket's directory, short name and id |
 | `DSH_SUPERAGENT_BLOCKED_COMMANDS` | Executor | Commands the Executor may not run |
-| `DSH_SUPERAGENT_GITHUB_REPOSITORY` | GitHub | The repository this Ticket works on, `owner/name` |
+| `DSH_SUPERAGENT_GITHUB_REPOSITORY` | GitHub | The repository this Ticket works on, `owner/name`; empty for a workspace-only Ticket |
 | `DSH_SUPERAGENT_GITHUB_REPOSITORIES` | GitHub | Every repository the deployment configures, one `owner/name` per line; the main Session uses it to choose |
 | `DSH_SUPERAGENT_GITHUB_ACCOUNT`, `DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL` | GitHub | The agent account and its commit email |
 | `DSH_SUPERAGENT_GITHUB_NUMBER`, `DSH_SUPERAGENT_GITHUB_PR_HEAD` | GitHub | The Issue or pull request that started the Ticket, and its head ref when it is a pull request |
 | `DSH_SUPERAGENT_FEISHU_BOT`, `DSH_SUPERAGENT_FEISHU_CHAT` | Feishu | The bot, and the chat that started the Ticket |
 
-Ticket-specific values come from its directory, its repository and its originating Trigger. Other values come from the current deployment settings. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
+Ticket-specific values come from its directory, its repository and its originating Trigger. A workspace-only Ticket has no repository value, but still receives every configured repository in `DSH_SUPERAGENT_GITHUB_REPOSITORIES`. Other values come from the current deployment settings. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
 
 Workers reach GitHub through the agent account's `gh` and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name.
 
