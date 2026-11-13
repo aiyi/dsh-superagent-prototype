@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople }
   from '../../core/index.ts'
 import { IM_WORDS, NOTE_WORDS, wordCount } from '../../infra/text.ts'
-import { AssessmentSchema, EvalReadSchema, WorktreeNameSchema, type MasterAssessor } from '../assessment.ts'
+import { AssessmentSchema, EvalReadSchema, WorktreeNameSchema, chooseRepository, type MasterAssessor } from '../assessment.ts'
 import { ticketCard } from '../cards.ts'
 import { PromptConfigSchema, savePrompts, type Prompts } from '../prompts.ts'
 import { readResource, type MainResourceHost, type ResourceHost } from '../resources.ts'
@@ -57,6 +57,7 @@ const RouteItemSchema = z.object({
   title: z.string().nullish().describe('accept: a short label of at most 200 characters describing the original request; no added requirements or implementation advice.'),
   worktree_name: z.string().nullish().describe(`accept: ${WorktreeNameSchema.description ?? ''}`),
   repository: z.string().nullish().describe('accept: the GitHub repository the ticket works on, owner/name, when the request does not come from one or the deployment has several.'),
+  workspace_only: z.boolean().nullish().describe('accept: workspace-only Ticket; no PR; cannot combine with repo.'),
   acknowledgement: z.string().nullish().describe(`accept: one brief sentence of at most ${IM_WORDS} words naming the concrete change and intended result in the source language. It is posted as a reply to the original source on acceptance, so do not quote the source; quote an earlier proposal briefly only when the trigger merely confirms it and the sentence does not already state it. No generic I will handle it.`),
   note: z.string().nullish().describe(`accept and attach: ${RoutingNoteSchema.description ?? ''}`),
   reason: z.string().nullish().describe('ignore and stop: why, at most 500 characters; an ignore needs it.'),
@@ -70,6 +71,7 @@ const FIELDS: Record<Field, { check: z.ZodType; reads: readonly Kind[]; needs: r
   title: { check: z.string().max(200), reads: ['accept'], needs: ['accept'] },
   worktree_name: { check: WorktreeNameSchema, reads: ['accept'], needs: ['accept'] },
   repository: { check: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'owner/name'), reads: ['accept'], needs: [] },
+  workspace_only: { check: z.boolean(), reads: ['accept'], needs: [] },
   acknowledgement: { check: AcknowledgementSchema, reads: ['accept'], needs: ['accept'] },
   note: { check: RoutingNoteSchema, reads: ['accept', 'attach'], needs: [] },
   reason: { check: z.string().max(500), reads: ['ignore', 'stop'], needs: ['ignore'] },
@@ -79,7 +81,7 @@ function invalid(item: RouteItem): string | undefined {
   for (const [field, { check, reads, needs }] of Object.entries(FIELDS) as [Field, typeof FIELDS[Field]][]) {
     const value = item[field]
     if (!reads.includes(item.kind)) continue
-    if (value === undefined || value === null || value.trim() === '') {
+    if (value === undefined || value === null || typeof value === 'string' && value.trim() === '') {
       if (needs.includes(item.kind)) return `${item.kind} needs ${field}`
       continue
     }
@@ -105,11 +107,10 @@ function route(host: MainToolsHost, item: RouteItem, decided: ReadonlyMap<string
       const repositories = host.repositories()
       const trigger = host.store.triggers.get(item.trigger_id)
       const derived = trigger ? host.repositoryOfSource(trigger.source) : undefined
-      const repository = item.repository ?? derived
-      if (!repository && repositories.length > 1) return { refused: `accept needs repository: ${repositories.join(', ')}` }
-      if (repository && repositories.length && !repositories.includes(repository)) return { refused: `repository is not configured: ${repository}` }
+      const choice = chooseRepository({ workspaceOnly: item.workspace_only === true, repository: item.repository ?? undefined, derived, repositories })
+      if ('refused' in choice) return { refused: choice.refused }
       const decision = host.engine.decide(item.trigger_id, { kind: 'accept', title: item.title!, scope: item.title!, reason: { code: 'explicitRouted' },
-        acknowledgement: item.acknowledgement!, name: item.worktree_name!, ...repository ? { repository } : {}, ...note })
+        acknowledgement: item.acknowledgement!, name: item.worktree_name!, ...choice.workspaceOnly ? { workspaceOnly: true } : {}, ...choice.repository ? { repository: choice.repository } : {}, ...note })
       // A Decision that created no ticket is the item's refusal; one that existed before keeps what it was accepted with.
       if (decision.kind !== 'accept' || !decision.ticketId) return { refused: `Ticket was not created: ${reasonText(decision.reason)}` }
       if (decision.id === before) {

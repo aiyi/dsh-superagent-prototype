@@ -18,7 +18,7 @@ import { SCHEMA_VERSION, Store } from '../src/app/store.ts'
 import { TextCache } from '../src/app/cache.ts'
 import { KV } from '../src/kv.ts'
 import { SettingsSchema, policyVersion, type SettingsOrigin } from '../src/policy.ts'
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { githubKind, pollRound } from '../src/sources/github.ts'
 import { CliError, Commands } from '../src/infra/commands.ts'
@@ -1094,6 +1094,34 @@ it('runs the prepare command once for a new ticket, under the execution root wit
   await runtime.idle()
   expect(runtime.store.tickets.get(failed.ticket.id)!.assignments.at(-1)).toMatchObject({ report: expect.objectContaining({ state: 'failed', summary: expect.stringContaining('The prepare command failed: fatal: no such clone') }) })
   expect(waitsForPerson(runtime.store.tickets.get(failed.ticket.id)!)).toBe(true)
+})
+
+it('prepares a workspace-only ticket without running the prepare command or checking out a repository', async () => {
+  const prepare = (command: string) => runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: command } })
+  prepare('exit 3')
+  const trigger = feishu('21', '@bot 把这份材料汇总一下')
+  await receive(trigger)
+  subprocess.spawn.mockClear()
+  const result = await route({ kind: 'accept', trigger_id: trigger.id, title: '汇总材料', worktree_name: 'summarize-material',
+    acknowledgement: '收到。', workspace_only: true })
+  await runtime.idle()
+  const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
+  expect(ticket.execution).toMatchObject({ workspaceOnly: true })
+  expect(ticket.execution?.repository).toBeUndefined()
+  expect(existsSync(ticket.execution!.directory)).toBe(true)
+  expect(readdirSync(ticket.execution!.directory)).toEqual([])
+  expect(subprocess.spawn.mock.calls.filter(([spec]) => spec.argv[0] === 'sh')).toEqual([])
+  expect(runtime.store.tickets.get(ticket.id)!.assignments.at(-1)).toMatchObject({ state: 'running' })
+  expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({
+    DSH_SUPERAGENT_GITHUB_REPOSITORY: '', DSH_SUPERAGENT_GITHUB_REPOSITORIES: 'acme/widgets' })
+})
+
+it('keeps the default repository in the environment of a legacy ticket with no stored repository', async () => {
+  const { ticket } = await acceptedTicket()
+  const { repository: _repository, workspaceOnly: _workspaceOnly, ...execution } = ticket.execution!
+  const legacy = { ...ticket, execution }
+  expect(Object.fromEntries(runtime.ticketEnvironment(legacy).map(variable => [variable.key, variable.value])))
+    .toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets' })
 })
 
 it('counts a ticket whose directory the host prepared before prepare commands existed as prepared', async () => {

@@ -1,3 +1,5 @@
+If this Ticket has no repository, do not open a pull request; report ready without `pr_number`.
+
 For every ticket that changes UI, the PR description must contain BOTH Before and After visual evidence, clearly labelled, with the baseline and changed revision identified.
 Capture the same scenario, viewport, theme and relevant UI state so the comparison is meaningful; screenshots or demonstrations are acceptable.
 After-only evidence is incomplete.

@@ -163,6 +163,29 @@ it('routes several triggers in one call, in order, and answers a refused or fail
   expect(h.runtime.store.tickets.list()).toHaveLength(2)
 })
 
+it('accepts a workspace-only ticket with no repository, an empty repository variable and no pull request', async () => {
+  const trigger = feishu('11', '@bot 把这份材料汇总成一页')
+  h.runtime.receive(trigger); await h.runtime.idle()
+  const result = await h.route({ kind: 'accept', trigger_id: trigger.id, title: '汇总材料', worktree_name: 'summarize-material',
+    acknowledgement: '收到，开始汇总。', workspace_only: true })
+  await h.runtime.idle()
+  const ticket = h.runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
+  expect(ticket.execution).toMatchObject({ workspaceOnly: true })
+  expect(ticket.execution?.repository).toBeUndefined()
+  const environment = Object.fromEntries(h.runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))
+  expect(environment).toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: '', DSH_SUPERAGENT_GITHUB_REPOSITORIES: 'acme/widgets' })
+  await expect(h.runTool(`worker-${ticket.id}`, 'orchestrator_report', { state: 'ready', summary: '汇总完成', pr_number: 1 }))
+    .rejects.toThrow('This ticket has no repository')
+})
+
+it('refuses workspace_only combined with a repository before creating a Ticket', async () => {
+  const trigger = feishu('12', '@bot 修一下')
+  h.runtime.receive(trigger); await h.runtime.idle()
+  await expect(h.route({ kind: 'accept', trigger_id: trigger.id, title: 'Fix', worktree_name: 'fix-it', acknowledgement: '收到。',
+    workspace_only: true, repository: 'acme/widgets' })).rejects.toThrow('workspace_only cannot be combined with repository')
+  expect(h.runtime.store.tickets.list()).toEqual([])
+})
+
 it('refuses alone an item that lacks a field its kind needs or breaks a field\'s limit, naming the field, and ignores unused fields', async () => {
   const triggers = ['2', '3', '4', '5', '6'].map(id => feishu(id, `@bot 请求 ${id}`))
   for (const trigger of triggers) h.runtime.receive(trigger)

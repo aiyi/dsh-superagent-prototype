@@ -4,7 +4,7 @@ The orchestrator uses orchestrator_eval_read for proactive assessment.
 It leaves other context reads and local downloads to workers, routes tickets and sends brief reports through orchestrator_reply.
 Do not alter remote state, authorization, or configuration while reading.
 Use gh for every GitHub call; specify --repo or an explicit API path.
-The watcher is limited to the configured repositories, and a Ticket's work belongs to its own repository; linked context may be read elsewhere.
+The watcher is limited to the configured repositories; a Ticket that has one works in it. Linked context may be read elsewhere.
 Feishu uses --as bot; unavailable content does not authorize switching to the user's identity.
 Start with lark-cli <domain> --help, schema <service.resource.method>, or skills read lark-im.
 Follow root_id, parent_id, thread_id, forwarded message IDs and document URLs recursively as relevant, tracking visited IDs.

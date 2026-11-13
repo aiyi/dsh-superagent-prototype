@@ -28,6 +28,7 @@ export const AssessmentSchema = z.object({
   worktree_name: WorktreeNameSchema.optional(),
   scope: z.string().max(1500),
   repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'owner/name').optional().describe('Accept: the repository the ticket works on, when the request did not come from a GitHub repository or the deployment has several.'),
+  workspace_only: z.boolean().optional(),
   intent_evidence: z.string().trim().min(1).max(700).nullish().describe('For acceptance: the quotes that establish the three facts.'),
   acknowledgement: AcknowledgementSchema.nullish().describe('For acceptance: one sentence in the source language, posted as a reply to the trigger; omit only when a matched rule asks for silence.'),
   reason: z.string().min(1).max(500),
@@ -37,6 +38,22 @@ export const AssessmentSchema = z.object({
 /** Character limits in the initial thread window: for the trigger itself, its two nearest neighbours, other window messages, and stub previews. */
 const TRIGGER_CHARS = 4000, NEAR_CHARS = 1200, WINDOW_CHARS = 400, STUB_CHARS = 50
 const FINISHED = 'This assessment has finished: it was decided, timed out or restarted'
+/**
+ * Chooses an accepted Ticket's repository from the accept fields: workspace-only, the named or derived
+ * repository, or none when one default suffices. Refuses a repository that is not configured and a
+ * non-GitHub accept that names none when several are configured.
+ */
+export function chooseRepository(input: { workspaceOnly?: boolean; repository?: string; derived?: string; repositories: readonly string[] }):
+  { repository?: string; workspaceOnly?: true } | { refused: string } {
+  const { workspaceOnly, repository: named, derived, repositories } = input
+  if (workspaceOnly && named) return { refused: 'workspace_only cannot be combined with repository' }
+  if (workspaceOnly) return { workspaceOnly: true }
+  const repository = named ?? derived
+  if (repository && repositories.length && !repositories.includes(repository)) return { refused: `repository is not configured: ${repository}` }
+  if (!repository && repositories.length > 1) return { refused: `accept needs repository: ${repositories.join(', ')}` }
+  return { repository }
+}
+
 const EXPLICIT = 'This is an explicit request, which is routed instead of assessed: use orchestrator_route with its trigger_id and kind accept, attach, stop or ignore'
 type AssessmentContext = Awaited<ReturnType<typeof admissionContext>>
 type ReadCache = {
@@ -277,9 +294,12 @@ export class MasterAssessor implements Assessor {
     signal?.throwIfAborted()
     const repositories = Object.values(this.host.deployment.repositories)
     const derived = this.host.deployment.repositories[trigger.source]
-    if (result.repository && repositories.length && !repositories.includes(result.repository)) throw new Error(`repository is not configured: ${result.repository}`)
-    if (result.decision === 'accept' && !result.repository && !derived && repositories.length > 1) throw new Error(`Name the repository the ticket works on: ${repositories.join(', ')}`)
-    const chosen = result.decision === 'accept' ? { ...result, repository: result.repository ?? derived ?? repositories[0] } : result
+    let chosen = result
+    if (result.decision === 'accept') {
+      const choice = chooseRepository({ workspaceOnly: result.workspace_only === true, repository: result.repository, derived, repositories })
+      if ('refused' in choice) throw new Error(choice.refused)
+      chosen = { ...result, ...(choice.workspaceOnly ? { workspace_only: true as const } : {}), ...(choice.repository ? { repository: choice.repository } : {}) }
+    }
     let outcome: AssessmentOutcome = assessmentOutcome(chosen, this.host.settings(), candidate.strength)
     if (outcome.kind === 'accept' && outcome.acknowledgement) outcome = { ...outcome, acknowledgement: checkedImText(outcome.acknowledgement) }
     const decision = this.host.engine.decide(triggerId, { ...outcome, evalId: candidate.evalId })

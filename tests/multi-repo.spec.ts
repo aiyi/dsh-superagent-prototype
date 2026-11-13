@@ -7,6 +7,7 @@ import { SourceRegistry } from '../src/sources/registry.ts'
 import { githubKind } from '../src/sources/github.ts'
 import { commentTrigger, githubChannel, issueTrigger } from '../src/sources/github-trigger.ts'
 import { agentPull, pullThread, pullsOfSource } from '../src/sources/github-pull.ts'
+import { chooseRepository } from '../src/app/assessment.ts'
 import { environmentOf } from '../src/app/execution-environment.ts'
 import { setupChanged } from '../src/app/setup.ts'
 import { testDeployment, testMachine } from './fixtures/deployment.ts'
@@ -78,14 +79,28 @@ describe('multiple GitHub Source instances', () => {
     sources.register(githubKind)
     const deployment = testDeployment({ repositories: { github: 'acme/widgets', 'github-acme-api': 'acme/api' } })
     const trigger = issueTrigger(issue('acme/api'), 'agent-bot', 'github-acme-api')
-    const values = (ticket: { id: string; name: string; directory: string } | undefined, trigger: Trigger | undefined, repository?: string) =>
-      Object.fromEntries(environmentOf({ deployment, sources, settings, ...ticket ? { ticket } : {}, ...trigger ? { trigger } : {}, ...repository ? { repository } : {} })
+    const values = (ticket: { id: string; name: string; directory: string } | undefined, trigger: Trigger | undefined, repository?: string, workspaceOnly = false) =>
+      Object.fromEntries(environmentOf({ deployment, sources, settings, ...ticket ? { ticket } : {}, ...trigger ? { trigger } : {}, ...repository ? { repository } : {}, ...workspaceOnly ? { workspaceOnly: true } : {} })
         .map(variable => [variable.key, variable.value]))
     expect(values({ id: 't1', name: 'fix-login', directory: '/w/fix-login' }, trigger, 'acme/api')).toMatchObject({
       DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/api', DSH_SUPERAGENT_GITHUB_REPOSITORIES: 'acme/widgets\nacme/api',
       DSH_SUPERAGENT_GITHUB_NUMBER: '12' })
+    // A workspace-only Ticket has no repository but keeps the list every deployment configures.
+    expect(values({ id: 't2', name: 'summarize-material', directory: '/w/summarize-material' }, trigger, undefined, true)).toMatchObject({
+      DSH_SUPERAGENT_GITHUB_REPOSITORY: '', DSH_SUPERAGENT_GITHUB_REPOSITORIES: 'acme/widgets\nacme/api' })
     // The main Session, which has no Ticket, reads the first configured repository and the full list.
     expect(values(undefined, undefined)).toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets', DSH_SUPERAGENT_GITHUB_REPOSITORIES: 'acme/widgets\nacme/api' })
+  })
+  it('chooses a workspace-only Ticket or a configured repository, and refuses a missing or unconfigured one', () => {
+    const configured = ['acme/widgets', 'acme/api']
+    expect(chooseRepository({ repositories: ['acme/widgets'] })).toEqual({ repository: undefined })
+    expect(chooseRepository({ repositories: configured })).toEqual({ refused: 'accept needs repository: acme/widgets, acme/api' })
+    expect(chooseRepository({ repositories: configured, repository: 'acme/api' })).toEqual({ repository: 'acme/api' })
+    expect(chooseRepository({ repositories: configured, derived: 'acme/widgets' })).toEqual({ repository: 'acme/widgets' })
+    expect(chooseRepository({ repositories: configured, repository: 'acme/other' })).toEqual({ refused: 'repository is not configured: acme/other' })
+    expect(chooseRepository({ repositories: configured, workspaceOnly: true })).toEqual({ workspaceOnly: true })
+    expect(chooseRepository({ repositories: configured, workspaceOnly: true, repository: 'acme/api' }))
+      .toEqual({ refused: 'workspace_only cannot be combined with repository' })
   })
   it('restarts setup when the instances or a repository change, but not for a receiving switch', () => {
     const before = settingsOf({ github: { enabled: true, config: { repository: 'acme/widgets', cli: 'gh-agent' } } })

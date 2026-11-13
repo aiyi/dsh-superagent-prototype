@@ -293,6 +293,10 @@ describe('assessment outcomes', () => {
     expect(assessmentOutcome(accept(auto, false), auto, 'inferred')).toMatchObject({ kind: 'ignore', reason: { code: 'noRuleMatched' } })
     expect(() => assessmentOutcome({ ...accept(auto), rule_assessments: [] }, auto, 'inferred')).toThrow('Exactly one assessment for every enabled rule')
     expect(() => assessmentOutcome({ ...accept(auto), intent_evidence: null }, auto, 'inferred')).toThrow('Acceptance requires intent_evidence')
+    // A workspace-only accept carries no repository through to the produced Ticket.
+    expect(assessmentOutcome({ ...accept(auto), workspace_only: true }, auto, 'inferred'))
+      .toMatchObject({ kind: 'accept', workspaceOnly: true })
+    expect(assessmentOutcome({ ...accept(auto), workspace_only: true }, auto, 'inferred')).not.toHaveProperty('repository')
     const scope = { scope: () => ({ listened: true as const, observed: true }) }
     const enabled = auto.policy.rules.find(rule => rule.enabled)!.id
     expect(settingsPolicy(auto, scope).admitsInferred([enabled])).toBe(true)
