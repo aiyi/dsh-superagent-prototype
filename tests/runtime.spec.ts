@@ -336,6 +336,8 @@ it('records worker reports, binds the task PR, ends the ticket on ready without 
   expect(runtime.store.tickets.get(ticket.id)!.ended).toBeUndefined()
   expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'worker_report', state: 'ready' })
   expect(await runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'result', text: '已提交 PR #42，待 review。' })).toEqual({ status: 'sent' })
+  expect(runtime.store.receipts.get(key('reply', ticket.id, '已提交 PR #42，待 review。'))?.context?.result)
+    .toMatchObject({ kind: 'changes', changes: [{ prUrl: 'https://github.com/acme/widgets/pull/42', state: 'open' }] })
   const mergedAt = new Date().toISOString()
   const merged = { number: 42, state: 'closed', merged: true, merged_at: mergedAt, html_url: 'https://github.com/acme/widgets/pull/42',
     user: { login: 'agent-bot' }, head: { sha: 'abc', ref: 'agent/x', repo: { full_name: 'acme/widgets' } } }
@@ -371,7 +373,7 @@ it('shows a message that carries JSON, with or without a label, as its label and
 
 it('ends a ticket on ready when no PR is bound', async () => {
   const { ticket, sessionId } = await acceptedTicket()
-  await runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'done locally' })
+  await runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'done locally', delivery: { artifacts: [], verification: [], limitations: [] } })
   expect(runtime.store.tickets.get(ticket.id)).toMatchObject({ ended: expect.objectContaining({ outcome: 'completed' }) })
   await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'late' })).rejects.toThrow('Ticket ended')
 })
@@ -1386,7 +1388,7 @@ it('tells the main Session of each requeue of the same Trigger', async () => {
 it('keeps replies and acknowledgements to an IM conversation within the IM limit', async () => {
   const { ticket, trigger, sessionId } = await acceptedTicket()
   const long = Array.from({ length: IM_WORDS + 1 }, () => 'word').join(' ')
-  await runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'reviewed' })
+  await runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'reviewed', delivery: { artifacts: [], verification: [], limitations: [] } })
   await expect(runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'result', text: long })).rejects.toThrow(`maximum is ${IM_WORDS}`)
   const follow = feishu('3', '还有一个问题', { mentions: [], root_id: trigger.meta.messageId as string, sender_id: MEMBER })
   await receive(follow)
@@ -1491,7 +1493,8 @@ it('restarts a worker that was mid-work when the host stopped with the recovery 
 it('keeps the report of a blocked, failed or ready worker whose turn ends, and relays nothing more', async () => {
   for (const state of ['blocked', 'failed', 'ready'] as const) {
     const { ticket, sessionId } = await acceptedTicket(feishu(String(20 + ['blocked', 'failed', 'ready'].indexOf(state)), `@bot 修 ${state}`, { root_id: undefined }))
-    await runTool(sessionId, 'orchestrator_report', { state, summary: `${state} report` })
+    await runTool(sessionId, 'orchestrator_report', { state, summary: `${state} report`,
+      ...(state === 'ready' ? { delivery: { artifacts: [], verification: [], limitations: [] } } : {}) })
     const relayed = relays(runtime.masterId).length
     const agent = agents.get(sessionId)! as { status: string }
     agent.status = 'idle'

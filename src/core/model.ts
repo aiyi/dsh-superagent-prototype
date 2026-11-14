@@ -214,6 +214,22 @@ export type AssignmentState = 'pending' | 'running' | 'ended'
  * ready (`ready`), a person must act to unblock or recover it (`blocked` or `failed`), or nothing is left to do (`dropped`).
  */
 export type ReportState = 'progress' | 'waiting' | 'ready' | 'blocked' | 'failed' | 'dropped'
+/** A file a result produced, by path relative to its delivery directory, with an optional human-readable label. */
+export interface DeliveryArtifact { path: string; label?: string }
+/** The delivery facts of a result that opens no pull request: what it produced, what it checked, and what remains undone. */
+export interface Delivery { artifacts: DeliveryArtifact[]; verification: string[]; limitations: string[] }
+/** A pull request a result reports, with the state the Ticket follows. */
+export interface ResultChange { prUrl: string; state: 'open' | 'merged' }
+/** The structured result a Channel may carry for `purpose=result`; the Voice Host reads it as the delivery contract. */
+export interface ResultEnvelope {
+  kind: 'answer' | 'artifact' | 'changes' | 'attention' | 'blocked'
+  summary: string
+  artifacts?: DeliveryArtifact[]
+  changes?: ResultChange[]
+  verification?: string[]
+  limitations?: string[]
+  nextAction?: string
+}
 /** Binding between a ticket and one executor instance. */
 export interface Assignment {
   id: string
@@ -222,7 +238,7 @@ export interface Assignment {
   startedAt?: string
   endedAt?: string
   endedReason?: string
-  report?: { state: ReportState; summary: string; at: string }
+  report?: { state: ReportState; summary: string; at: string; delivery?: Delivery }
   /** When Inputs last reached the worker; one at or after `report.at` means the worker has been busy with Inputs since that report. */
   deliveredAt?: string
   /**

@@ -2,13 +2,29 @@
 import { z } from 'zod'
 import { liveTicket, type EngineForExecutor, type Ticket } from '../../core/index.ts'
 import { IM_WORDS } from '../../infra/text.ts'
-import { claimPull, readPull } from '../../sources/github-pull.ts'
+import { claimPull, pullsOf, readPull } from '../../sources/github-pull.ts'
 import type { SourceContext } from '../../sources/host.ts'
 import { readResource, type ResourceHost } from '../resources.ts'
 import type { Store } from '../store.ts'
 import { reportRelay, threadFollowedNotice } from '../notices.ts'
 import type { Sessions } from '../sessions.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
+
+const relativePath = z.string().trim().min(1).max(300)
+  .refine(path => !path.startsWith('/') && !path.startsWith('\\') && !/^[A-Za-z]:[\\/]/.test(path) && !path.split(/[\\/]/).includes('..'),
+    'Use a path relative to the delivery directory, without ".."')
+/**
+ * The delivery facts of a result that opens no pull request: the files it produced, the checks actually run, and what it did
+ * not do or verify. A ready report carries them so the user-facing result states them instead of free text.
+ */
+const DeliverySchema = z.object({
+  artifacts: z.array(z.object({ path: relativePath, label: z.string().trim().min(1).max(100).optional() }).strict()).max(20)
+    .describe('Every file the result produced, by path relative to the delivery directory; empty when it produced no file.'),
+  verification: z.array(z.string().trim().min(1).max(300)).max(20)
+    .describe('Checks or evidence actually run, never what should hold.'),
+  limitations: z.array(z.string().trim().min(1).max(300)).max(20)
+    .describe('What was not done or verified and what a person must finish; empty when nothing remains.'),
+}).strict()
 
 export interface ExecutorToolsHost {
   readonly engine: Pick<EngineForExecutor, 'report' | 'reply' | 'markUnrelated' | 'handback' | 'followForContext'>
@@ -80,6 +96,7 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         human_action: z.string().trim().min(1).max(1000).nullish().describe('One concrete question for a person, also with state=progress; omit to keep the pending one, null to clear it.'),
         question_for_trigger_id: z.string().optional().describe('With human_action: the human message that raised the question, which is asked where that person wrote.'),
         pr_number: z.number().int().positive().nullish().describe(`The ticket's PR: its source PR, or one by ${host.github(ticket).deployment.github.login} from a branch named after this ticket (DSH_SUPERAGENT_NAME).`),
+        delivery: DeliverySchema.nullish().describe('For a result that opens no pull request: what it produced, the verification and the limitations. Required on a ready report when the Ticket opens no pull request.'),
         reply_to_trigger_id: z.string().optional().describe('The original human question or follow-up this report answers, so the reply returns to its channel; never for ordinary progress.'),
       }).strict(),
       execute: async (args, signal) => {
@@ -88,12 +105,16 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         if (args.pr_number != null && current.execution?.workspaceOnly) {
           throw new Error('This ticket has no repository, so it cannot own a pull request; report ready without pr_number')
         }
+        if (args.state === 'ready' && args.pr_number == null && !pullsOf(current).length && !args.delivery) {
+          throw new Error('A ready result with no pull request must carry delivery: artifacts (empty when it produced no file), verification and limitations; report the pull request with pr_number for PR work')
+        }
         const pull = args.pr_number != null ? await readPull(host.github(current), args.pr_number, signal) : undefined
         // Claim the PR, record the report, and queue the relay atomically so a rejected PR claim or invalid report leaves no partial state, and a recorded report always reaches the main Session.
         return host.store.atomic(() => {
           const refused = pull && claimPull(host.github(current), ticketId, pull)
           if (refused) throw new Error(refused)
-          const report = { state: args.state, summary: args.summary, ...(args.human_action !== undefined ? { question: args.human_action } : {}),
+          const report = { state: args.state, summary: args.summary, ...(args.delivery ? { delivery: args.delivery } : {}),
+            ...(args.human_action !== undefined ? { question: args.human_action } : {}),
             ...(args.question_for_trigger_id ? { askedBy: args.question_for_trigger_id } : {}),
             ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id } : {}) }
           const updated = host.engine.report(ticketId, report)

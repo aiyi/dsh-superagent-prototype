@@ -94,7 +94,7 @@ Reviews without a body, such as approvals, also arrive as Triggers and can wake 
 
 ## How a Ticket ends
 
-- **Ready without a pull request:** a `ready` Report ends the Ticket as completed.
+- **Ready without a pull request:** a `ready` Report ends the Ticket as completed. Such a Report also carries `delivery`: its artifacts by path relative to `DSH_SUPERAGENT_DELIVERY_DIR` when the Source configures it, else the Ticket directory; the checks actually run; and what it did not do or verify. The report tool refuses a ready result that opens no pull request without them, and the user-facing result states them.
 - **Nothing to do:** an Executor that finds no work for a person to act on, such as a request that does not reproduce or is superseded, reports `dropped`. The Ticket ends without a message, unless a matched rule asks for one, and a person's later message on its Threads resumes it.
 ### Pull requests
 

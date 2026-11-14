@@ -48,12 +48,33 @@ export const DshHistoryRequestSchema = z.object({ version: z.literal(DSH_VERSION
   snapshotId: opaque, part: z.enum(['context', 'message']), cursor: z.string().min(1).max(2000).optional(),
   message: DshReferenceSchema.optional() }).strict().refine(value => value.part === 'message'
     ? !!value.message && !value.cursor : !value.message, { message: 'History selection must match its part' })
+const relativeArtifactPath = z.string().trim().min(1).max(300)
+  .refine(path => !path.startsWith('/') && !path.startsWith('\\') && !/^[A-Za-z]:[\\/]/.test(path) && !path.split(/[\\/]/).includes('..'),
+    'Artifact paths are relative to the delivery directory, without ".."')
+/** The structured result of a delegated task: what it delivered, how it was verified, and what remains done by whom. */
+export const DshResultSchema = z.object({
+  kind: z.enum(['answer', 'artifact', 'changes', 'attention', 'blocked']),
+  summary: z.string().min(1).max(2000),
+  artifacts: z.array(z.object({ path: relativeArtifactPath, label: z.string().min(1).max(100).optional() }).strict()).max(20).optional(),
+  changes: z.array(z.object({ prUrl: z.url().max(500), state: z.enum(['open', 'merged']) }).strict()).max(10).optional(),
+  verification: z.array(z.string().min(1).max(300)).max(20).optional(),
+  limitations: z.array(z.string().min(1).max(300)).max(20).optional(),
+  nextAction: z.string().min(1).max(500).optional(),
+}).strict().superRefine((value, ctx) => {
+  const fail = (message: string, path: (string | number)[]) => ctx.addIssue({ code: 'custom', message, path })
+  if (value.kind === 'artifact' && !value.artifacts?.length) fail('kind=artifact needs at least one artifact', ['artifacts'])
+  if (value.kind === 'changes' && !value.changes?.length) fail('kind=changes needs at least one change', ['changes'])
+  if (value.kind === 'answer' && value.artifacts?.length) fail('kind=answer must not carry artifacts', ['artifacts'])
+  if (value.kind === 'attention' && !value.nextAction) fail('kind=attention needs nextAction', ['nextAction'])
+  if (value.kind === 'blocked' && !value.limitations?.length) fail('kind=blocked needs limitations', ['limitations'])
+})
+export type DshResult = z.infer<typeof DshResultSchema>
 export const DshReplySchema = z.object({ version: z.literal(DSH_VERSION), replyId: z.string().min(1).max(256),
   bindingId: opaque, requestId: opaque, text: z.string().min(1).max(20000), kind: z.enum(['acknowledgement', 'reply', 'notice']),
   ticketId: z.string().min(1).max(256).optional(), context: z.object({
     purpose: z.enum(['acknowledgement', 'answer', 'result', 'attention', 'status', 'notice']),
     triggerId: z.string().min(1).max(256).optional(), attentionId: z.string().min(1).max(256).optional(),
-    ticketTitle: z.string().max(200).optional(),
+    ticketTitle: z.string().max(200).optional(), result: DshResultSchema.optional(),
   }).strict().optional() }).strict()
 export type DshReply = z.infer<typeof DshReplySchema>
 export const DshDeliverySchema = z.object({ version: z.literal(DSH_VERSION), replyId: z.string().min(1).max(256),

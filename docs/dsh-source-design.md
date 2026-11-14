@@ -28,6 +28,7 @@ settings block (`dsh`, or another instance named `dsh-<name>`):
 | incomingTokenFile | Absolute file containing the credential Voice uses to call Superagent |
 | voiceTokenFile | Absolute file containing the credential Superagent uses to call Voice |
 | sharedSources | Explicit `{source: <instance-id>}` grants to continue work originating on other Sources; default empty |
+| deliveryWorkspace | Absolute directory where non-PR results write artifacts, usually the Voice user workspace. The Ticket's execution environment exposes it as `DSH_SUPERAGENT_DELIVERY_DIR`, and report paths are relative to it; empty uses the Ticket directory |
 | timeoutMs | Peer request deadline; default 5000 ms |
 | maxReaders | Concurrent remote history requests per Voice origin; default 1, maximum 4; excess requests fail instead of queuing |
 
@@ -145,7 +146,12 @@ Existing Outbox persists and retries the Source's Channel writes. The Channel
 POSTs a `DshReplySchema` envelope to the fixed Voice endpoint
 `/voice-bridge/v1/replies`, using the outgoing credential. It includes stable
 replyId, bindingId, requestId, text, kind and frozen context (purpose, original
-Trigger, attention ID and Ticket title where applicable).
+Trigger, attention ID, Ticket title and, for a result, its `result` delivery
+contract where applicable). A `purpose=result` reply carries `context.result`:
+kind, summary, artifacts, changes, verification, limitations and nextAction,
+built from the worker's latest report and the pull requests the Ticket follows.
+The Voice peer reads it as the contract and falls back to the text for old
+replies.
 
 Context is frozen when queued, never guessed from a later mutable Ticket.
 Acknowledgements are presentation metadata: Voice must not automatically speak

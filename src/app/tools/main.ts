@@ -2,9 +2,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
-import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople }
-  from '../../core/index.ts'
+import { UserError, followupOwners, key, latestReport, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople,
+  type ResultChange, type ResultEnvelope } from '../../core/index.ts'
 import { IM_WORDS, NOTE_WORDS, wordCount } from '../../infra/text.ts'
+import { pullThread } from '../../sources/github-pull.ts'
 import { AssessmentSchema, EvalReadSchema, WorktreeNameSchema, chooseRepository, type MasterAssessor } from '../assessment.ts'
 import { ticketCard } from '../cards.ts'
 import { PromptConfigSchema, savePrompts, type Prompts } from '../prompts.ts'
@@ -44,6 +45,33 @@ function routed(host: MainToolsHost, result: { decision?: DecisionKind; reason: 
   const ticket = result.ticketId ? host.store.tickets.get(result.ticketId) : undefined
   return { ...(result.decision ? { decision: result.decision } : {}), reason: result.reason,
     ...(ticket ? { ticket: ticketCard(ticket) } : {}) }
+}
+/**
+ * Builds a result's delivery contract from the worker's latest report and the pull requests the Ticket follows. The main
+ * Session never restates these facts: a non-PR report must carry them, and a PR result reports the bound PRs as they are.
+ */
+function resultEnvelope(host: MainToolsHost, ticketId: string): ResultEnvelope | undefined {
+  const ticket = host.store.tickets.get(ticketId)
+  if (!ticket) return undefined
+  const report = latestReport(ticket)
+  if (!report) return undefined
+  const changes: ResultChange[] = []
+  for (const follow of ticket.follows ?? []) {
+    if (follow.closed?.outcome === 'closed') continue
+    const parsed = pullThread(follow.thread)
+    if (!parsed) continue
+    const url = host.store.threads.get(follow.thread)?.meta.url
+    const repository = host.repositoryOfSource(parsed.source)
+    const prUrl = typeof url === 'string' && url ? url : repository ? `https://github.com/${repository}/pull/${parsed.number}` : ''
+    if (prUrl) changes.push({ prUrl, state: follow.closed?.outcome === 'merged' ? 'merged' : 'open' })
+  }
+  const delivery = report.delivery
+  const kind: ResultEnvelope['kind'] = report.state === 'blocked' || report.state === 'failed' ? 'blocked'
+    : changes.length ? 'changes' : delivery?.artifacts.length ? 'artifact' : 'answer'
+  const limitations = delivery?.limitations.length ? delivery.limitations : kind === 'blocked' ? [report.summary.slice(0, 300)] : []
+  return { kind, summary: report.summary.slice(0, 2000),
+    ...(delivery?.artifacts.length ? { artifacts: delivery.artifacts } : {}), ...(changes.length ? { changes } : {}),
+    ...(delivery?.verification.length ? { verification: delivery.verification } : {}), ...(limitations.length ? { limitations } : {}) }
 }
 const fromDecision = (decision: Decision) => ({ decision: decision.kind, reason: reasonText(decision.reason), ticketId: decision.ticketId })
 /**
@@ -248,7 +276,7 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
     }),
     tool({
       name: 'orchestrator_reply',
-      description: `Send an answer (including pre-ticket clarification/refusal), a verified result, attention, or status for a human stop or failed/blocked report. Routine progress is refused. IM limit: ${IM_WORDS} words.`,
+      description: `Send an answer (including pre-ticket clarification/refusal), a verified result, attention, or status for a human stop or failed/blocked report. A result carries its delivery contract, built from the worker's latest report. Routine progress is refused. IM limit: ${IM_WORDS} words.`,
       schema: z.object({
         trigger_id: z.string().optional().describe('The original human question, for an answer only.'),
         ticket_id: z.string().optional(),
@@ -257,14 +285,17 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
         text: z.string().min(1).max(20000),
       }).strict(),
       execute: async args => {
+        if (args.purpose === 'result' && !args.ticket_id) throw new Error('A result needs ticket_id so its delivery contract can be built from the worker report')
         if (args.ticket_id && args.trigger_id) {
           const trigger = host.store.triggers.get(args.trigger_id), target = host.store.tickets.get(args.ticket_id)
           if (trigger && isDshSource(trigger.source) && (!target || host.resources.sourceTargetAllowed?.(trigger, target) !== true)) {
             throw new Error('The reply target is outside this Voice binding')
           }
         }
+        const result = args.purpose === 'result' ? resultEnvelope(host, args.ticket_id!) : undefined
         const reply = host.engine.reply({ purpose: args.purpose, text: args.text, ...(args.trigger_id ? { triggerId: args.trigger_id } : {}),
-          ...(args.ticket_id ? { ticketId: args.ticket_id } : {}), ...(args.human_action ? { question: args.human_action } : {}) })
+          ...(args.ticket_id ? { ticketId: args.ticket_id } : {}), ...(args.human_action ? { question: args.human_action } : {}),
+          ...(result ? { result } : {}) })
         await host.sendReplies()
         return { status: host.store.replyStatus(reply.id) ?? reply.status }
       },

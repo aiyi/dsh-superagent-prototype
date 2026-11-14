@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer, { type WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { apply, acceptDsh, DshConfigSchema, dshKind, type DshConfig } from '../src/sources/dsh.ts'
-import { DshHandoffSchema, dshHandoff, dshTrigger, type DshHandoff, type DshPage } from '../src/sources/dsh-protocol.ts'
+import { DshHandoffSchema, DshReplySchema, dshHandoff, dshTrigger, type DshHandoff, type DshPage } from '../src/sources/dsh-protocol.ts'
 import { dshPost, dshToken, DSH_MAX_BYTES } from '../src/sources/dsh-transport.ts'
 import { sourceContext } from '../src/sources/host.ts'
 import { startRuntime, type Host } from './fixtures/host.ts'
@@ -223,7 +223,7 @@ it('enforces the history timeout and owner-private credential files', async () =
 
 it('routes a new human append back to done A while B runs, and a retry after completion creates no extra Assignment', async () => {
   const a = await admitted('alpha'), b = await admitted('beta')
-  await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: 'A done' }); await h.runtime.idle()
+  await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: 'A done', delivery: { artifacts: [], verification: [], limitations: [] } }); await h.runtime.idle()
   const request = handoff('continue', '继续 A 的调研', 'append'), { value } = await submit(request); await h.runtime.idle()
   const all = await read(`dsh/${value.triggerId}/tickets`)
   expect((all.items as { ticket_id: string }[]).map(item => item.ticket_id)).toEqual(expect.arrayContaining([a.ticketId, b.ticketId]))
@@ -231,7 +231,7 @@ it('routes a new human append back to done A while B runs, and a retry after com
   try {
     await read(`dsh/${value.triggerId}/tickets`)
     await h.route({ kind: 'attach', trigger_id: value.triggerId, ticket_id: a.ticketId }); await h.runtime.idle()
-    await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: 'A continued' }); await h.runtime.idle()
+    await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: 'A continued', delivery: { artifacts: [], verification: [], limitations: [] } }); await h.runtime.idle()
     const before = h.runtime.store.tickets.get(a.ticketId)!.assignments.length
     await h.route({ kind: 'attach', trigger_id: value.triggerId, ticket_id: a.ticketId }); await h.runtime.idle()
     expect(h.runtime.store.tickets.get(a.ticketId)!.assignments).toHaveLength(before)
@@ -359,15 +359,44 @@ it('shares other source work only by explicit source grant and returns follow-up
   h.runtime.store.saveSettings({ ...settings, sources: { ...settings.sources, dsh: { enabled: true, config: shared } } })
   expect((await read(`dsh/${value.triggerId}/tickets`)).items).toEqual(expect.arrayContaining([expect.objectContaining({ ticket_id: other.ticket.id })]))
   await h.route({ kind: 'attach', trigger_id: value.triggerId, ticket_id: other.ticket.id }); await h.runtime.idle()
-  await h.runTool(other.sessionId, 'orchestrator_report', { state: 'ready', summary: '地图调研结果', reply_to_trigger_id: value.triggerId })
+  await h.runTool(other.sessionId, 'orchestrator_report', { state: 'ready', summary: '地图调研结果', reply_to_trigger_id: value.triggerId, delivery: { artifacts: [], verification: [], limitations: [] } })
   await h.runTool(h.runtime.masterId, 'orchestrator_reply', { purpose: 'answer', ticket_id: other.ticket.id,
     trigger_id: value.triggerId, text: '地图调研结果' })
   expect(replies.at(-1)).toMatchObject({ requestId: request.requestId, context: { purpose: 'answer', triggerId: value.triggerId } })
 })
 
+it('validates the delivery envelope kind rules', () => {
+  const base = { version: 1, replyId: 'r', bindingId: 'b', requestId: 'q', text: 'x', kind: 'reply' as const }
+  const parse = (result: unknown) => DshReplySchema.safeParse({ ...base, context: { purpose: 'result', result } }).success
+  expect(parse({ kind: 'answer', summary: 'done' })).toBe(true)
+  expect(parse({ kind: 'artifact', summary: 'done' })).toBe(false)
+  expect(parse({ kind: 'artifact', summary: 'done', artifacts: [{ path: 'documents/a.md' }] })).toBe(true)
+  expect(parse({ kind: 'artifact', summary: 'done', artifacts: [{ path: '../a.md' }] })).toBe(false)
+  expect(parse({ kind: 'changes', summary: 'done', changes: [{ prUrl: 'https://github.com/acme/widgets/pull/1', state: 'open' }] })).toBe(true)
+  expect(parse({ kind: 'blocked', summary: 'no', limitations: ['access'] })).toBe(true)
+  expect(parse({ kind: 'attention', summary: 'no', nextAction: 'Decide' })).toBe(true)
+})
+
+it('builds the result envelope from the worker report and sends it to Voice', async () => {
+  const a = await admitted('contract')
+  const delivery = { artifacts: [{ path: 'documents/report.md', label: '报告' }], verification: ['读了三份材料'], limitations: ['没有核对第四份'] }
+  await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: '报告完成', delivery })
+  await h.runtime.idle()
+  await h.runTool(h.runtime.masterId, 'orchestrator_reply', { ticket_id: a.ticketId, purpose: 'result', text: '报告写好了，见 documents/report.md。' })
+  expect(replies.at(-1)).toMatchObject({ context: { purpose: 'result', result: { kind: 'artifact', summary: '报告完成', ...delivery } } })
+})
+
+it('exposes the configured delivery workspace to a ticket from the Voice binding', async () => {
+  const settings = h.runtime.store.settings()
+  h.runtime.store.saveSettings({ ...settings, sources: { ...settings.sources, dsh: { enabled: true, config: { ...config, deliveryWorkspace: h.directory } } } })
+  const a = await admitted('delivery-dir')
+  const environment = Object.fromEntries(h.runtime.ticketEnvironment(h.runtime.store.tickets.get(a.ticketId)!).map(variable => [variable.key, variable.value]))
+  expect(environment.DSH_SUPERAGENT_DELIVERY_DIR).toBe(h.directory)
+})
+
 it('rolls a failed route receipt back with the Engine change, then permits a safe retry', async () => {
   const a = await admitted('atomic')
-  await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: 'done' }); await h.runtime.idle()
+  await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: 'done', delivery: { artifacts: [], verification: [], limitations: [] } }); await h.runtime.idle()
   const { value } = await submit(handoff('atomic-next', '继续', 'append')); await h.runtime.idle()
   const set = h.runtime.store.set.bind(h.runtime.store)
   const fault = vi.spyOn(h.runtime.store, 'set').mockImplementation((name, value) => {

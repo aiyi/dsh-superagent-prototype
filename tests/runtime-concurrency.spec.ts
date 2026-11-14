@@ -582,7 +582,7 @@ describe('a worker whose work runs in the background', () => {
     const agent = h.agents.get(one.sessionId)!
     h.subagents.settle(h.subagents.spawn(one.sessionId))
     // Its ready report ends the ticket, and it ends its own turn.
-    await h.runTool(one.sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done' })
+    await h.runTool(one.sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done', delivery: { artifacts: [], verification: [], limitations: [] } })
     await h.runtime.idle(); await new Promise(resolve => setTimeout(resolve, 10))
     expect(agent.cancel).not.toHaveBeenCalled()
     // A release that fails after the ends woke the worker still cancels that turn.
@@ -632,7 +632,7 @@ describe('what a worker read', () => {
   /** A ticket its worker completed, and a person's thanks on its thread, which resumes it once received. */
   async function completed() {
     const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
-    await h.runTool(one.sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done' }); await h.runtime.idle()
+    await h.runTool(one.sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done', delivery: { artifacts: [], verification: [], limitations: [] } }); await h.runtime.idle()
     idle(one.sessionId)
     await later()
     return { one, thanks: feishu('2', '@bot 谢谢', { root_id: 'om_1' }), ticket: () => h.runtime.store.tickets.get(one.ticket.id)! }
@@ -817,7 +817,7 @@ it('resumes an ended ticket a person wrote to during a pause once it lifts, unde
   }
   const ended = async (id: string) => {
     const { ticket, sessionId } = await h.acceptedTicket(feishu(id, `@bot 修${id}`, { root_id: `om_${id}` }))
-    await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done.' })
+    await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done.', delivery: { artifacts: [], verification: [], limitations: [] } })
     return ticket.id
   }
   const first = await ended('1'), second = await ended('3')
