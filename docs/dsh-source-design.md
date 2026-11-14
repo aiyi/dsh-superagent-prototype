@@ -57,15 +57,16 @@ All envelopes reject unknown fields and unsupported versions.
 
 `POST /voice-bridge/v1/sources/<source-id>/handoffs`
 uses `Authorization: Bearer <incoming credential>` and a `DshHandoffSchema` body.
-The body includes version, requestId, bindingId, action, optional hint, the exact
-human anchor and a frozen snapshot with its bounded initial dialogue page.
+The body includes version, requestId, bindingId, the exact human anchor and a
+frozen snapshot with its bounded initial dialogue page.
 The initial page must contain the unchanged human anchor. Original physical
 Session/message/event references survive daily rotation.
 
 Received requests have one independent Source Thread each. Only the anchor
 becomes a Trigger; earlier dialogue is read-only context, not additional work.
 Actor and Channel are derived from the authenticated configured binding.
-Action/hint remain model suggestions and never replace Trigger.text.
+The handoff carries no model-supplied action, hint or summary; Trigger.text and
+the dialogue are the requirement.
 
 A 200 response is `{version, requestId, bindingId, triggerId, status: "received"}`.
 It means the request and Trigger committed atomically, not accepted or running.

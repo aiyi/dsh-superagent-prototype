@@ -21,10 +21,10 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${(server.address() as { port: number }).port}`
 }
 async function body(req: IncomingMessage) { const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk)); return JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown> }
-function handoff(id: string, text = '请研究这个，只调研不改代码', action: DshHandoff['action'] = 'new'): DshHandoff {
+function handoff(id: string, text = '请研究这个，只调研不改代码'): DshHandoff {
   const anchor = { ref: { sessionId: 'voice-user-2026-11-13', messageId: `message-${id}`, eventSeq: 5 },
     kind: 'human' as const, producer: 'user' as const, at: '2026-11-13T01:00:00.000Z', text }
-  return DshHandoffSchema.parse({ version: 1, requestId: `request-${id}`, bindingId: 'user', action, anchor,
+  return DshHandoffSchema.parse({ version: 1, requestId: `request-${id}`, bindingId: 'user', anchor,
     snapshot: { id: `snapshot-${id}`, page: { messages: [anchor], complete: true } } })
 }
 let h: Host, config: DshConfig, voice: Server, bridge: Server, bridgeUrl: string
@@ -128,7 +128,9 @@ it('accepts only authenticated bound human origins, freezes IDs and persists que
   const first = await submit(request)
   expect(first).toMatchObject({ code: 200, value: { status: 'received' } })
   expect(await submit(request)).toEqual(first)
-  expect((await submit({ ...request, hint: 'changed' })).code).toBe(409)
+  expect((await submit({ ...request, hint: 'changed' })).code).toBe(400)
+  expect((await submit({ ...request, action: 'stop' })).code).toBe(400)
+  expect((await submit({ ...request, snapshot: { ...request.snapshot, id: 'snapshot-changed' } })).code).toBe(409)
   expect((await submit({ ...request, requestId: 'another' })).code).toBe(409)
   await h.runtime.idle()
   expect(h.runtime.store.tickets.list()).toHaveLength(0)
@@ -138,6 +140,12 @@ it('accepts only authenticated bound human origins, freezes IDs and persists que
   expect(await response.json()).toMatchObject({ status: 'received', triggerId: first.value.triggerId })
   const reopened = new Store(join(h.directory, 'orchestrator.sqlite'))
   try { expect(reopened.get('dsh-request:request-first')).toMatchObject({ triggerId: first.value.triggerId }) } finally { reopened.close() }
+})
+
+it('still reads a trigger stored before the parameterless handoff', () => {
+  const legacy = { ...handoff('legacy'), action: 'new', hint: '旧提示' } as unknown as DshHandoff
+  const trigger = dshTrigger('dsh', 'voice-user', legacy)
+  expect(dshHandoff(trigger)).toMatchObject({ requestId: 'request-legacy', bindingId: 'user' })
 })
 
 it.each(['tool_call', 'tool_result', 'reasoning', 'system', 'runtime'])('rejects %s records rather than exporting execution history', async kind => {
@@ -178,7 +186,9 @@ it('rolls receipt and Trigger back together when receipt persistence fails', () 
 it('gives explicit Router and its worker the local snapshot, with no Voice HTTP request or agent activation', async () => {
   const { triggerId, ticketId } = await admitted('local')
   const candidate = h.relays(h.runtime.masterId).find(item => item.trigger_id === triggerId)!
-  expect(candidate.source_context).toMatchObject({ action: 'new', read: `dsh/${triggerId}/context` })
+  expect(candidate.source_context).toMatchObject({ read: `dsh/${triggerId}/context` })
+  expect(candidate.source_context).not.toHaveProperty('action')
+  expect(candidate.source_context).not.toHaveProperty('hint')
   expect(await original(`dsh/${triggerId}/context`)).toMatchObject({ messages: [{ text: '请研究这个，只调研不改代码' }] })
   expect(await original(`dsh/${triggerId}/message`, `worker-${ticketId}`)).toMatchObject({ message: { kind: 'human' } })
   expect(histories).toEqual([])
@@ -224,7 +234,7 @@ it('enforces the history timeout and owner-private credential files', async () =
 it('routes a new human append back to done A while B runs, and a retry after completion creates no extra Assignment', async () => {
   const a = await admitted('alpha'), b = await admitted('beta')
   await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: 'A done', delivery: { artifacts: [], verification: [], limitations: [] } }); await h.runtime.idle()
-  const request = handoff('continue', '继续 A 的调研', 'append'), { value } = await submit(request); await h.runtime.idle()
+  const request = handoff('continue', '继续 A 的调研'), { value } = await submit(request); await h.runtime.idle()
   const all = await read(`dsh/${value.triggerId}/tickets`)
   expect((all.items as { ticket_id: string }[]).map(item => item.ticket_id)).toEqual(expect.arrayContaining([a.ticketId, b.ticketId]))
   const list = vi.spyOn(h.runtime.store.tickets, 'list').mockImplementation(() => { throw new Error('No full-history scan') })
@@ -249,7 +259,7 @@ it('isolates worker dialogue and rejects routing to another binding or reading i
   const a = await admitted('owner'), b = await admitted('other')
   const origin = h.runtime.store.triggers.get(b.triggerId)!
   h.runtime.store.triggers.save({ ...origin, actor: { ...origin.actor, id: 'someone-else' } })
-  const { value } = await submit(handoff('steer', '补充一下', 'append')); await h.runtime.idle()
+  const { value } = await submit(handoff('steer', '补充一下')); await h.runtime.idle()
   await expect(h.route({ kind: 'attach', trigger_id: value.triggerId, ticket_id: b.ticketId })).rejects.toThrow('outside')
   await expect(original(`dsh/${b.triggerId}/context`, `worker-${a.ticketId}`)).rejects.toThrow()
   await expect(read(`dsh/${a.triggerId}/tickets`, `worker-${a.ticketId}`)).rejects.toThrow('main Session')
@@ -275,7 +285,7 @@ it('delivers pre-ticket clarification and refusal without creating work, and pre
 
 it('stops the Router-selected ticket and reports actual stop/failed states through durable replies', async () => {
   const a = await admitted('stop'), b = await admitted('keep')
-  const { value } = await submit(handoff('stop-now', '停止第一个，第二个继续', 'stop')); await h.runtime.idle()
+  const { value } = await submit(handoff('stop-now', '停止第一个，第二个继续')); await h.runtime.idle()
   await h.route({ kind: 'stop', trigger_id: value.triggerId, ticket_id: a.ticketId }); await h.runtime.idle()
   await h.runTool(h.runtime.masterId, 'orchestrator_reply', { purpose: 'status', ticket_id: a.ticketId, trigger_id: value.triggerId, text: '第一个已停止。' })
   expect(h.runtime.store.tickets.get(a.ticketId)!.ended?.by).toBe('human')
@@ -284,7 +294,7 @@ it('stops the Router-selected ticket and reports actual stop/failed states throu
   await h.runTool(`worker-${b.ticketId}`, 'orchestrator_report', { state: 'failed', summary: 'missing access' })
   await h.runTool(h.runtime.masterId, 'orchestrator_reply', { purpose: 'status', ticket_id: b.ticketId, text: '访问权限不足，暂时无法继续。' })
   await expect(h.runTool(h.runtime.masterId, 'orchestrator_reply', { purpose: 'result', ticket_id: b.ticketId, text: 'done' })).rejects.toThrow()
-  const newMessage = await submit(handoff('resume-stop', '继续', 'append')); await h.runtime.idle()
+  const newMessage = await submit(handoff('resume-stop', '继续')); await h.runtime.idle()
   await expect(h.route({ kind: 'attach', trigger_id: newMessage.value.triggerId, ticket_id: a.ticketId })).rejects.toThrow('stopped')
 })
 
@@ -353,7 +363,7 @@ it('retains visible assistant and attributed result context, rejects future/dupl
 
 it('shares other source work only by explicit source grant and returns follow-up answers to Voice', async () => {
   const other = await h.acceptedTicket((await import('./fixtures/host.ts')).feishu('external', '调研地图'))
-  const request = handoff('cross', '继续地图调研', 'append'), { value } = await submit(request); await h.runtime.idle()
+  const request = handoff('cross', '继续地图调研'), { value } = await submit(request); await h.runtime.idle()
   await expect(h.route({ kind: 'attach', trigger_id: value.triggerId, ticket_id: other.ticket.id })).rejects.toThrow('outside')
   const settings = h.runtime.store.settings(), shared = { ...config, sharedSources: [{ source: 'feishu' }] }
   h.runtime.store.saveSettings({ ...settings, sources: { ...settings.sources, dsh: { enabled: true, config: shared } } })
@@ -397,7 +407,7 @@ it('exposes the configured delivery workspace to a ticket from the Voice binding
 it('rolls a failed route receipt back with the Engine change, then permits a safe retry', async () => {
   const a = await admitted('atomic')
   await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: 'done', delivery: { artifacts: [], verification: [], limitations: [] } }); await h.runtime.idle()
-  const { value } = await submit(handoff('atomic-next', '继续', 'append')); await h.runtime.idle()
+  const { value } = await submit(handoff('atomic-next', '继续')); await h.runtime.idle()
   const set = h.runtime.store.set.bind(h.runtime.store)
   const fault = vi.spyOn(h.runtime.store, 'set').mockImplementation((name, value) => {
     if (String(name).startsWith('dsh-route:')) throw new Error('route receipt disk failure')
@@ -415,7 +425,7 @@ it('rolls a failed route receipt back with the Engine change, then permits a saf
 
 it('allows a worker handback to select another ticket without replaying its old attachment', async () => {
   const a = await admitted('handback-a'), b = await admitted('handback-b')
-  const { value } = await submit(handoff('routed', '补充刚才的', 'append')); await h.runtime.idle()
+  const { value } = await submit(handoff('routed', '补充刚才的')); await h.runtime.idle()
   await h.route({ kind: 'attach', trigger_id: value.triggerId, ticket_id: a.ticketId }); await h.runtime.idle()
   await h.runTool(`worker-${a.ticketId}`, 'orchestrator_trigger_handback', { trigger_id: value.triggerId, reason: 'This belongs to the other request.' })
   await h.runtime.idle()

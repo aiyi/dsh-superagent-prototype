@@ -26,7 +26,6 @@ export const DshPageSchema = z.object({ messages: z.array(DshMessageSchema).max(
     }
   })
 export const DshHandoffSchema = z.object({ version: z.literal(DSH_VERSION), requestId: opaque, bindingId: opaque,
-  action: z.enum(['new', 'append', 'stop']), hint: z.string().trim().min(1).max(120).optional(),
   anchor: DshMessageSchema.refine(message => message.kind === 'human', 'An anchor must be genuine human input'),
   snapshot: z.object({ id: opaque, page: DshPageSchema }).strict() }).strict().superRefine((request, ctx) => {
   const anchor = request.snapshot.page.messages.find(message => sameReference(message.ref, request.anchor.ref))
@@ -88,7 +87,12 @@ export const dshRequestKey = (requestId: string) => `dsh-request:${requestId}`
 export const dshOriginKey = (triggerId: string) => `dsh-origin:${triggerId}`
 export function dshHandoff(trigger: Trigger): DshHandoff {
   if (!isDshSource(trigger.source)) throw new Error('A DSH source trigger is required')
-  return DshHandoffSchema.parse(trigger.meta.handoff)
+  const stored = trigger.meta.handoff as Record<string, unknown>
+  // Handoffs persisted before the parameterless contract still carry the removed model fields; ingress never accepts them.
+  const handoff = { ...stored }
+  delete handoff.action
+  delete handoff.hint
+  return DshHandoffSchema.parse(handoff)
 }
 /** Creates one immutable incoming event on its own Thread, never a conversation-wide fan-out thread. */
 export function dshTrigger(source: string, principal: string, request: DshHandoff): Trigger {

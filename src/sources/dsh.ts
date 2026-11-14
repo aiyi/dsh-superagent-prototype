@@ -81,11 +81,10 @@ export const dshKind: SourceKind<DshConfig> = {
   policy: { schema: z.object({ allowed: z.array(z.object({ id: z.string().min(1), name: z.string().optional() }).strict()).default([]) }).strict(),
     fields: [{ key: 'allowed', type: 'rows', label: { zh: '允许的 Voice 用户', en: 'Allowed Voice principals' },
       columns: [{ key: 'id', type: 'text', label: { zh: '用户 ID', en: 'Principal ID' } }] }],
-    explicit: { zh: '可信 Voice Host 代绑定用户提交的原始工作请求；模型提示不扩大授权。',
-      en: 'Original human requests delegated by the authenticated, bound Voice Host; model hints grant no extra authority.' } },
+    explicit: { zh: '可信 Voice Host 代绑定用户提交的原始工作请求；交接不带模型动作、提示或摘要。',
+      en: 'Original human requests delegated by the authenticated, bound Voice Host; a handoff carries no model-supplied action, hint or summary.' } },
   original: { reference: (trigger, config) => { if (!allowed(trigger, config)) throw new Error('DSH binding is unavailable')
-    const request = dshHandoff(trigger); return { action: request.action,
-    ...(request.hint ? { hint: request.hint } : {}), read: `dsh/${trigger.id}/context`, tickets: `dsh/${trigger.id}/tickets` } }, read: readOriginal },
+    return { read: `dsh/${trigger.id}/context`, tickets: `dsh/${trigger.id}/tickets` } }, read: readOriginal },
   targetAllowed(trigger, _ticket, origin, config) {
     if (!allowed(trigger, config) || !origin) return false
     return origin.source === trigger.source && origin.actor.id === config.principalId && origin.meta.bindingId === config.bindingId
