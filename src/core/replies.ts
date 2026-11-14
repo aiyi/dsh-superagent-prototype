@@ -2,7 +2,7 @@
 import { key } from './ids.ts'
 import { UserError } from './errors.ts'
 import { latestAssignment, latestReport, liveTicket, ticketOutcome } from './model.ts'
-import type { ChannelRef, Ticket, Trigger } from './model.ts'
+import type { ChannelRef, ResultEnvelope, Ticket, Trigger } from './model.ts'
 import type { ReplyStatus } from './ports.ts'
 import { EnginePart } from './part.ts'
 
@@ -13,7 +13,7 @@ import { EnginePart } from './part.ts'
  */
 export type ReplyRequest =
   | { purpose: 'acknowledgement'; ticketId: string; triggerId: string; text: string }
-  | { purpose: 'answer' | 'result' | 'attention' | 'status'; ticketId?: string; triggerId?: string; question?: string; text: string }
+  | { purpose: 'answer' | 'result' | 'attention' | 'status'; ticketId?: string; triggerId?: string; question?: string; text: string; result?: ResultEnvelope }
 /** A queued message: its id, whether it went out, and whether an earlier request had queued it already. */
 export interface Reply { id: string; status: ReplyStatus; reused: boolean }
 
@@ -99,7 +99,8 @@ export class Replies extends EnginePart {
     const origin = ['answer', 'status'].includes(request.purpose) && trigger ? trigger : asker ?? (ticket ? this.source(ticket) : undefined)
     this.options.outbox.send({ id, channel, text: request.text, kind: 'reply', ...ticket ? { ticketId: ticket.id } : {},
       context: { purpose: request.purpose, ...(origin ? { triggerId: origin.id } : {}),
-        ...(attention ? { attentionId: attention.id } : {}), ...(ticket ? { ticketTitle: ticket.title } : {}) } })
+        ...(attention ? { attentionId: attention.id } : {}), ...(ticket ? { ticketTitle: ticket.title } : {}),
+        ...(request.purpose === 'result' && request.result ? { result: request.result } : {}) } })
     if (request.purpose === 'answer' && ticket && trigger && ticket.answers?.includes(trigger.id)) {
       ticket.answers = ticket.answers.filter(item => item !== trigger.id)
       this.repo.tickets.save(ticket)

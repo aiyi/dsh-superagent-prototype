@@ -37,7 +37,7 @@ interface Skill { name: string; description: string; content: string }
  * Maximum combined character count of system prompt and tool definitions per role (~5% above baseline).
  * Lower this limit when shrinking model-facing text; raise it only intentionally and explain why in the commit message.
  */
-const BUDGET: Record<Role, number> = { orchestrator: 59_000, worker: 40_500 }
+const BUDGET: Record<Role, number> = { orchestrator: 59_500, worker: 41_100 }
 const PROMPTS = 'prompts/, skills/', TOOLS = 'src/app/tools/', SESSIONS = 'src/app/sessions.ts'
 const NOTICES = 'src/app/notices.ts', LINKS = 'src/app/links.ts', ASSESSMENT = 'src/app/assessment.ts'
 const EXECUTOR = 'src/executor/dsh.ts', ERRORS = 'src/core/errors.ts'
@@ -198,7 +198,7 @@ async function drive(host: Host) {
   await run(master, 'orchestrator_ticket_note', { ticket_id: a, text: 'Ticket B changes the same settings page.' })
   await runtime.pump()
   await runtime.idle()
-  await run(workerA, 'orchestrator_report', { state: 'ready', summary: 'Done.' })
+  await run(workerA, 'orchestrator_report', { state: 'ready', summary: 'Done.', delivery: { artifacts: [], verification: [], limitations: [] } })
   await runtime.receive(feishu('2', '再加一个按钮', { mentions: [], root_id: 'om_1' }))
   await vi.waitFor(async () => {
     await runtime.pump()

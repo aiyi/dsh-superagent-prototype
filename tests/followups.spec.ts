@@ -190,7 +190,7 @@ it('takes the message a follow-up answers from its Source kind, whichever kind i
 it('tells the main Session of a follow-up to an ended ticket once the ticket resumes, and not when it cannot', async () => {
   h = await startRuntime()
   const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
-  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done' })
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done', delivery: { artifacts: [], verification: [], limitations: [] } })
   expect(h.runtime.store.tickets.get(ticket.id)!.ended).toBeDefined()
   // While processing is paused the message waits for the ticket, which has not resumed: the main Session hears nothing yet.
   await h.runtime.settings.pause(true, 'panel')

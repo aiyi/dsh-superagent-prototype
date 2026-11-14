@@ -1,6 +1,6 @@
 /** Session tool registration, role-scoped resource reads, and routing/settings tool contracts. */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { TICKET_STATES } from '../src/app/cards.ts'
+import { TICKET_STATES, reportText } from '../src/app/cards.ts'
 import { builtInBase, builtInParts, defaultPrompts } from '../src/app/prompts.ts'
 import { UserError } from '../src/core/index.ts'
 import { KV } from '../src/kv.ts'
@@ -178,6 +178,21 @@ it('accepts a workspace-only ticket with no repository, an empty repository vari
     .rejects.toThrow('This ticket has no repository')
 })
 
+it('requires delivery on a non-PR ready report, rejects a path outside the delivery directory, and renders it', async () => {
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('13', '@bot 把材料汇总成一页'))
+  await expect(h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: '汇总完成' })).rejects.toThrow('must carry delivery')
+  await expect(h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: '汇总完成',
+    delivery: { artifacts: [{ path: '../outside.md' }], verification: [], limitations: [] } })).rejects.toThrow('relative')
+  const delivery = { artifacts: [{ path: 'documents/report.md', label: '报告' }], verification: ['读了三份材料'], limitations: ['没有核对第四份'] }
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: '汇总完成', delivery })
+  await h.runtime.idle()
+  expect(relaysOf('worker_report').at(-1)).toMatchObject({ delivery })
+  const report = h.runtime.store.tickets.get(ticket.id)!.assignments.at(-1)!.report!
+  expect(report.delivery).toEqual(delivery)
+  expect(reportText(report)).toContain('documents/report.md (报告)')
+  expect(reportText(report)).toMatch(/Verification:\n- 读了三份材料/)
+})
+
 it('refuses workspace_only combined with a repository before creating a Ticket', async () => {
   const trigger = feishu('12', '@bot 修一下')
   h.runtime.receive(trigger); await h.runtime.idle()
@@ -271,7 +286,7 @@ it('ignores a proactive candidate from its card beside other decisions, marked s
 
 it('returns where a reply stands: sent, or dropped when its conversation can no longer receive it', async () => {
   const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
-  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done.' })
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done.', delivery: { artifacts: [], verification: [], limitations: [] } })
   const reply = (text: string) => h.runTool(h.runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'result', text })
   expect(await reply('修好了。')).toEqual({ status: 'sent' })
   vi.mocked(Commands.prototype.lark).mockRejectedValue(new CliError('the message was withdrawn', 230011))
@@ -429,11 +444,12 @@ it('relays a worker\'s report with its ticket card and the start of its summary,
   expect(relaysOf('worker_attention').at(-1)).toEqual({ kind: 'worker_attention', state: 'progress', read: `ticket/${ticket.id}/result`,
     ticket: expect.objectContaining({ ticket_id: ticket.id, state: 'person/answer', attention: expect.objectContaining({ question: 'Desktop too?' }) }) })
   const summary = 'Done. ' + 'Evidence. '.repeat(100)
-  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary, human_action: null })
+  const delivery = { artifacts: [{ path: 'documents/report.md', label: '报告' }], verification: ['ran the check'], limitations: ['未核对第四份'] }
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary, human_action: null, delivery })
   await h.runtime.idle()
   const report = relaysOf('worker_report').at(-1)!
   expect(report).toMatchObject({ ticket: { ticket_id: ticket.id, title: ticket.title }, trigger_id: trigger.id, state: 'ready', chars: summary.length,
-    read: `ticket/${ticket.id}/result` })
+    read: `ticket/${ticket.id}/result`, delivery })
   expect(String(report.summary)).toBe(summary.slice(0, 600))
   expect(report.ticket).not.toHaveProperty('preview')
   // The end of the ticket, which the ready report brought, comes with its card.

@@ -6,7 +6,7 @@ import { readGithub } from '../sources/github-read.ts'
 import { feishuReferences, feishuRead } from '../sources/feishu-read.ts'
 import { feishuRef } from '../sources/feishu.ts'
 import { feishuTriggerId } from '../sources/feishu-trigger.ts'
-import { ASSIGNMENTS, INPUTS, assignmentLine, decisionCard, decisionDetails, inputLine, newestPage, preview, textPage, threadCard, ticketCard,
+import { ASSIGNMENTS, INPUTS, assignmentLine, decisionCard, decisionDetails, inputLine, newestPage, preview, reportText, textPage, threadCard, ticketCard,
   ticketDetails, triggerCard, type TicketThread } from './cards.ts'
 import { threadTitle } from './views/records.ts'
 import { transcriptEntry } from './context.ts'
@@ -306,11 +306,13 @@ const ROUTES: readonly Route[] = [
     } else if (section === 'report' && part) {
       const report = ticket.assignments.find(item => item.id === part)?.report
       if (!report) throw new Error('Unknown assignment report')
-      body = report.summary
+      body = reportText(report)
     } else if (part !== undefined) throw new Error('Unknown context resource')
     else if (section === 'assignment') body = ticket.execution?.assignment ?? ''
-    else if (section === 'result') body = latestReport(ticket)?.summary ?? ''
-    else if (section === 'transcript') {
+    else if (section === 'result') {
+      const report = latestReport(ticket)
+      body = report ? reportText(report) : ''
+    } else if (section === 'transcript') {
       body = (await transcript(host, id)).flatMap((event, index) => {
         const entry = transcriptEntry(event)
         const said = entry?.message.content.map(block => block.type === 'text' ? block.text : `[${block.type}]`).join(' ') ?? ''

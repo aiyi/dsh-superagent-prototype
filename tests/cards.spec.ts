@@ -88,6 +88,8 @@ const RULES: [rule: string, file: string, says: string[], gone?: string[]][] = [
   ['Human attention is limited', 'team/communication', ['Human attention is limited']],
   ['Each automated reviewer gets at most three rounds per PR', 'team/communication', ['at most three review rounds per PR from each automated reviewer']],
   ['An incomplete draft is blocked, and every change is reviewed and checked', 'work', ['An incomplete draft is blocked', 'Review changes and run relevant checks']],
+  ['A non-PR result carries its artifacts, verification and limitations', '*',
+    ['When a result opens no pull request, its ready report also carries delivery', 'A result that opens no pull request states the report\'s artifact paths']],
   ['Investigation has no fixed round limit', 'team/scope', ['There is no fixed investigation or implementation round limit']],
   ['A resolved blocker resumes on its own; a person\'s hold lasts until a person lifts it', 'team/scope',
     ['resume autonomously without asking the human to say continue', 'questions or new technical clues do not lift it']],

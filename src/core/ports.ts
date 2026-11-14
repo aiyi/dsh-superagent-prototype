@@ -1,5 +1,5 @@
 /** Ports the core depends on. Sources, policies, assessors, executors, and channels are project-specific. */
-import type { Assignment, ChannelRef, Decision, DecisionKind, Mandate, MandateBasis, Strength, Thread, Ticket, TicketEndBy, TicketOutcome, Trigger }
+import type { Assignment, ChannelRef, Decision, DecisionKind, Mandate, MandateBasis, ResultEnvelope, Strength, Thread, Ticket, TicketEndBy, TicketOutcome, Trigger }
   from './model.ts'
 import type { Reason } from './reasons.ts'
 
@@ -72,7 +72,7 @@ export interface Executor {
 export interface OutboundMessage { id: string; channel: ChannelRef; text: string; kind: 'acknowledgement' | 'reply' | 'notice'; ticketId?: string
   /** Frozen when queued, never reconstructed from a ticket's later mutable state. */
   context?: { purpose: 'acknowledgement' | 'answer' | 'result' | 'attention' | 'status' | 'notice';
-    triggerId?: string; attentionId?: string; ticketTitle?: string }
+    triggerId?: string; attentionId?: string; ticketTitle?: string; result?: ResultEnvelope }
 }
 /** A queued message waits (`pending`), went out (`sent`), or was dropped because its conversation can never receive it (`dropped`). */
 export type ReplyStatus = 'pending' | 'sent' | 'dropped'

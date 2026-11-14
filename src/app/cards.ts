@@ -1,11 +1,21 @@
 /** Compact, bounded model-facing projections of triggers, tickets, threads, and decisions; full texts stay behind readable resources. */
-import { latestReport, reasonText, threadKey, ticketStage, type Decision, type Mandate, type Thread, type Ticket, type TicketInput,
+import { latestReport, reasonText, threadKey, ticketStage, type Decision, type Delivery, type Mandate, type Thread, type Ticket, type TicketInput,
   type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { pullOf } from '../sources/github-pull.ts'
 import { batchLine, inputResource } from '../executor/dsh.ts'
 
 /** Collapses whitespace and truncates text for display previews while keeping code, angle brackets, and links intact for model readers. */
 export function preview(text: string): string { return text.replace(/\s+/g, ' ').slice(0, 160) }
+/** A report as its reader sees it: the summary, then the delivery facts a result without a pull request must state. */
+export function reportText(report: { summary: string; delivery?: Delivery }): string {
+  const { delivery } = report
+  if (!delivery) return report.summary
+  const section = (title: string, items: string[]) => `\n\n${title}:\n${items.length ? items.map(item => `- ${item}`).join('\n') : '- none'}`
+  return report.summary
+    + section('Artifacts', delivery.artifacts.map(artifact => artifact.label ? `${artifact.path} (${artifact.label})` : artifact.path))
+    + section('Verification', delivery.verification)
+    + section('Limitations', delivery.limitations)
+}
 export function triggerCard(trigger: Trigger, disposition?: TriggerDisposition) {
   return { trigger_id: trigger.id, source: trigger.source, ...(trigger.url ? { source_url: trigger.url } : {}), actor: trigger.actor.id, thread: threadKey(trigger.threads[0]!), human: trigger.human, at: trigger.at,
     preview: preview(trigger.text), chars: trigger.text.length, read: `trigger/${trigger.id}`,
