@@ -33,7 +33,7 @@ interface DshResult {
 ### 2.2 Constraints
 
 - `kind` and `summary` are required.
-- `kind=artifact` needs at least one `artifacts` entry; `path` is relative to the delivery directory, with no absolute path and no `..`. The worker creates the file before reporting it.
+- `kind=artifact` needs at least one `artifacts` entry; `path` is relative to the delivery directory (the bound Voice workspace for a DSH Ticket, otherwise the Ticket workspace), with no absolute path and no `..`. The worker creates the file before reporting it.
 - `kind=changes` needs at least one `changes` entry; `prUrl` and `state` are reported as they are, and the agent never merges for the user.
 - `kind=answer` has an empty `artifacts` list and a `summary` that is itself the deliverable; "the report is placed" without a path is not an answer.
 - `kind=attention` puts the question in `nextAction`; `kind=blocked` states the obstacle and the needed condition in `limitations`.
@@ -50,6 +50,7 @@ The superagent reply builder fills the envelope from the worker report, not the 
 `WorkerReport` gains `delivery`; `Assignment.report` stores it:
 
 ```ts
+interface DeliveryArtifact { path: string; label?: string }
 interface Delivery { artifacts: DeliveryArtifact[]; verification: string[]; limitations: string[] }
 interface WorkerReport { /* state, summary, question, askedBy, answers */ delivery?: Delivery }
 ```
@@ -74,7 +75,7 @@ The envelope is frozen on the outbound message when it is queued, like the rest 
 
 ### 3.3 Protocol schema and vendoring
 
-`DshReplySchema` in [dsh-protocol.ts](../src/sources/dsh-protocol.ts) gains an optional `result` with a strict schema. The Voice Host does not edit its copy by hand: `plugins/dsh-session-gateway/vendor/dsh-protocol.mjs` is generated from this file by `plugins/dsh-session-gateway/scripts/update-superagent-protocol.mjs`, which checks the pinned revision and the source hash and regenerates the module and its declarations. The Voice Host bumps the pin in [provenance.json](https://github.com/aiyi/dsh-voice/blob/main/plugins/dsh-session-gateway/vendor/provenance.json) only after the superagent schema commit exists.
+`DshReplySchema` in [dsh-protocol.ts](../src/sources/dsh-protocol.ts) gains an optional `result` with a strict schema. The Voice Host does not edit its copy by hand: in that repository, `plugins/dsh-session-gateway/vendor/dsh-protocol.mjs` is generated from this file by `plugins/dsh-session-gateway/scripts/update-superagent-protocol.mjs`, which checks the pinned revision and the source hash and regenerates the module and its declarations. The Voice Host bumps the pin in [provenance.json](https://github.com/aiyi/dsh-voice/blob/main/plugins/dsh-session-gateway/vendor/provenance.json) only after the superagent schema commit exists.
 
 ## 4 Where artifacts live (decision requested)
 
