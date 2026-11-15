@@ -1,5 +1,6 @@
 /** ACP v1 client over the newline-delimited JSON-RPC stdio of a Hermes profile's `acp` command. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { chooseHermesPermissionOption } from './hermes-permissions.ts'
 
 /** One `session/update` notification of a session. */
 export interface AcpUpdate { sessionId: string; update: Record<string, unknown> }
@@ -157,15 +158,13 @@ export class AcpProcess implements AcpConnection {
   /** Chooses an explicit allow option for one permission request, preferring the widest scope the agent offers. */
   private answerPermission(id: number | undefined, params: Record<string, unknown>): void {
     const options = (Array.isArray(params.options) ? params.options : []) as { optionId?: string; kind?: string; name?: string }[]
-    const allow = (optionId: string) => options.find(option => option.optionId === optionId)
-      ?? options.find(option => option.kind === optionId)
-    const chosen = allow('allow_always') ?? allow('allow_session') ?? allow('allow_once')
-      ?? options.find(option => (option.kind ?? '').startsWith('allow'))
+    const chosen = chooseHermesPermissionOption(options.flatMap(option => option.optionId && option.kind
+      ? [{ optionId: option.optionId, kind: option.kind }] : []))
     this.options.onPermission?.({ sessionId: String(params.sessionId ?? ''), toolCall: params.toolCall as Record<string, unknown> | undefined,
-      options }, chosen?.optionId)
+      options }, chosen)
     if (id === undefined) return
-    this.send({ jsonrpc: '2.0', id, result: chosen?.optionId === undefined ? { outcome: { outcome: 'cancelled' } }
-      : { outcome: { outcome: 'selected', optionId: chosen.optionId } } })
+    this.send({ jsonrpc: '2.0', id, result: chosen === undefined ? { outcome: { outcome: 'cancelled' } }
+      : { outcome: { outcome: 'selected', optionId: chosen } } })
   }
 
   private send(message: unknown): void {

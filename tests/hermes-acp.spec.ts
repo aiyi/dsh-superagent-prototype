@@ -14,7 +14,7 @@ const log = (): Entry[] => existsSync(join(directory, 'acp.log'))
   ? readFileSync(join(directory, 'acp.log'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Entry) : []
 
 function open(env: Record<string, string> = {}, events: string[] = []): AcpProcess {
-  directory ??= mkdtempSync(join(tmpdir(), 'acp-test-'))
+  if (!directory) directory = mkdtempSync(join(tmpdir(), 'acp-test-'))
   const acp = new AcpProcess({ command: process.execPath, args: [FIXTURE], env: { FAKE_ACP_LOG: join(directory, 'acp.log'), ...env },
     onUpdate: ({ update }) => { const content = update.content as { text?: string } | undefined
       if (update.sessionUpdate === 'agent_message_chunk' && content?.text) events.push(content.text) } })

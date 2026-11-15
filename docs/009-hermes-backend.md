@@ -75,6 +75,9 @@ the DSH worker.**
 - The ACP client advertises no client-side file-system, terminal or elicitation
   capabilities: Hermes runs files and commands itself, on the operator's OS user, as
   it does for any ACP editor.
+- The process starts with `HERMES_YOLO_MODE=1` and `HERMES_ACCEPT_HOOKS=1`
+  (`src/executor/hermes-permissions.ts`), which turns off dangerous-command and
+  unseen-hook approvals inside Hermes itself.
 - On `session/new`/`session/resume` the executor sets the `dont_ask` edit mode, so
   workspace edits do not prompt. Any remaining `session/request_permission`
   (dangerous commands, sensitive paths) is answered with the widest allow option the
@@ -100,6 +103,17 @@ operator's user can. That matches DSH workers and must be treated the same way.
 The Executor runs `<command> -p <profile> acp` from the state directory. Changing
 these fields needs no restart; the next launch uses them. A Ticket keeps the
 `Execution.runtime` it was accepted with, even after the setting changes.
+
+The panel's Execution settings group carries the same switch. Before this change the
+group had no general-task backend; afterwards it shows the segmented control, and
+selecting Hermes ACP reveals the profile, command and turn-timeout fields:
+
+![Execution settings before the change](assets/hermes-backend-before.png)
+
+![Execution settings after the change](assets/hermes-backend-after.png)
+
+![Execution settings with Hermes ACP selected](assets/hermes-backend-after-hermes-selected.png)
+
 
 ## 5 Data and lifecycle
 

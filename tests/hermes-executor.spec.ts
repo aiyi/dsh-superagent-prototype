@@ -125,6 +125,7 @@ describe('HermesAcpExecutor', () => {
     expect(h.connection.newSessions[0]!.mcpServers[0]).toMatchObject({ type: 'http', name: 'superagent',
       url: 'http://127.0.0.1:3082/hermes-bridge/v1/mcp?ticket=ticket-1', headers: [{ name: 'Authorization', value: 'Bearer secret' }] })
     expect(h.connection.modes).toEqual([['s1', 'dont_ask']])
+    expect(h.connection.options.env).toMatchObject({ HERMES_YOLO_MODE: '1', HERMES_ACCEPT_HOOKS: '1' })
     expect(h.kv.get(KV.hermes.session('ticket-1'))).toBe('s1')
     expect(h.engine.assignmentStarted).toHaveBeenCalledWith('ticket-1', 'a1')
     expect(h.executor.activeCount()).toBe(1)

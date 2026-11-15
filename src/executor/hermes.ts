@@ -6,7 +6,6 @@ import { mkdir } from 'node:fs/promises'
 import { latestAssignment, latestReport, liveTicket, runningAssignment, waitsForPerson } from '../core/index.ts'
 import type { Assignment, EngineForExecutor, Ticket, TicketInput, Trigger } from '../core/index.ts'
 import type { Machine } from '../deployment.ts'
-import type { Settings } from '../policy.ts'
 import type { Store } from '../app/store.ts'
 import { Later, type Effects } from '../app/effects.ts'
 import { KV } from '../kv.ts'
@@ -15,13 +14,12 @@ import type { HealthEntry } from '../infra/health.ts'
 import { acpFactory, type AcpConnection, type AcpFactory, type AcpMcpServer, type AcpSession, type AcpUpdate } from './acp.ts'
 import { batchLine, batchOf, inputMessage, sourceTrigger, transient, triggerMessage } from './dsh.ts'
 import { hermesMcpUrl } from './hermes-bridge.ts'
+import { HERMES_FULL_EDIT_MODE, hermesAcpLaunch } from './hermes-permissions.ts'
 
 /** How much of the assignment text the first prompt carries inline; a longer one is read through the ticket resource. */
 const ASSIGNMENT_CHARS = 1500
 /** How long a launch waits for its session before the effect retries with backoff. */
 const LAUNCH_TRIES = 3
-/** The ACP edit mode that auto-allows edits in this session; commands are still auto-approved one request at a time. */
-const EDIT_MODE = 'dont_ask'
 /** What a Hermes worker is told about its backend, beyond the worker prompt every Executor Session gets. */
 const BACKEND_RULES = `## Execution backend: Hermes ACP
 This Ticket runs in a Hermes ACP session, not in a DSH Session.
@@ -197,7 +195,9 @@ export class HermesAcpExecutor {
     this.connecting ??= (async () => {
       const settings = this.hermes
       const factory = this.host.acp ?? acpFactory
-      const connection = factory({ command: settings.command, args: ['-p', settings.profile, 'acp'], cwd: this.host.machine.stateDir,
+      // The one ACP process serves every Hermes Ticket, so its own cwd is the state directory; a session's cwd is its Ticket's.
+      const launch = hermesAcpLaunch({ profile: settings.profile, cwd: this.host.machine.stateDir, command: settings.command })
+      const connection = factory({ command: launch.command, args: launch.args, cwd: launch.cwd, env: launch.env,
         onUpdate: update => this.onUpdate(update), onPermission: (request, optionId) => {
           this.reportHealth('ready', `Approved ${optionId ?? 'no option'}: ${String(request.toolCall?.title ?? 'a permission request').slice(0, 160)}`)
         } })
@@ -241,7 +241,7 @@ export class HermesAcpExecutor {
     this.sessions.set(ticket.id, sessionId)
     this.tickets.set(sessionId, ticket.id)
     this.host.store.set(KV.hermes.session(ticket.id), sessionId)
-    await connection.setMode(sessionId, EDIT_MODE).catch(() => { /* Older Hermes versions have no edit modes; permissions still auto-allow. */ })
+    await connection.setMode(sessionId, HERMES_FULL_EDIT_MODE).catch(() => { /* Older Hermes versions have no edit modes; permissions still auto-allow. */ })
   }
 
   /** Forgets and closes a Ticket's ACP session. */

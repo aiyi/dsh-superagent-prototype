@@ -17,7 +17,7 @@ export const HERMES_FULL_PERMISSION_ENV = Object.freeze({
 /** ACP edit mode that auto-allows file edits for the session, the closest ACP mode to a DSH worker's file access. */
 export const HERMES_FULL_EDIT_MODE = 'dont_ask'
 
-/** How to start the Hermes ACP process for one backend session. */
+/** How to start the Hermes ACP process of the backend. */
 export interface HermesAcpLaunch {
   command: string
   args: string[]
@@ -25,17 +25,17 @@ export interface HermesAcpLaunch {
   env: NodeJS.ProcessEnv
 }
 
-/** What `hermesAcpLaunch` needs: the Hermes profile, the session working directory, and optional command/env overrides. */
+/** What `hermesAcpLaunch` needs: the Hermes profile, the process working directory, and optional command/env overrides. */
 export interface HermesAcpLaunchOptions {
   profile: string
-  /** The Ticket directory; also the session cwd passed to ACP `session/new`. */
+  /** The ACP process's working directory; each session gets its Ticket directory as `cwd` on `session/new`. */
   cwd: string
   command?: string
   env?: NodeJS.ProcessEnv
 }
 
 /**
- * Build the Hermes ACP process launch for a Ticket.
+ * Build the Hermes ACP process launch.
  *
  * `--yolo` is deliberately not an argument: `hermes acp` rejects it, so full permission is carried by the process
  * environment, which Hermes freezes into each session it creates.

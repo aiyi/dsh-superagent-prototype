@@ -424,6 +424,9 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/assessment.spec.ts` | What the MasterAssessor keeps per Eval, and when it lets go |
 | `tests/background.spec.ts` | Waiting for a worker's shell jobs and subagents: an end that woke it, and a host that stops |
 | `tests/hermes-permissions.spec.ts` | The Hermes backend's launch environment, ACP edit mode and permission-option choice |
+| `tests/hermes-acp.spec.ts` | The ACP client against a scripted agent: stdio framing, sessions, permission answers, cancellation and resumption |
+| `tests/hermes-executor.spec.ts` | The Hermes backend: launch and prompt content, session resume, Input delivery, turn-end report facts, timeout and stop |
+| `tests/hermes-bridge.spec.ts` | The Hermes MCP bridge: the private token, authentication, ticket scoping, tool discovery and calls |
 | `tests/bundle-patch.spec.ts` | The bundle's patch, read as DeepSeek Harness reads it, and the agent preset of Executor Sessions it defines |
 | `tests/effects.spec.ts` | The effect queue: coalescing, limits, retries with backoff, health and shutdown |
 | `tests/passes.spec.ts` | Passes: one at a time, the ones asked for during a pass run as one after it, and the runtime health a failed pass reports |

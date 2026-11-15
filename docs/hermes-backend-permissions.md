@@ -1,11 +1,12 @@
 # Hermes backend permissions
 
-- Status: the permission policy is implemented and verified; the Hermes ACP Executor that consumes it is not yet
-  implemented. See [Remaining work](#remaining-work).
+- Status: implemented. The permission policy and the Hermes ACP backend that consumes it are both in this repository;
+  [009 Hermes ACP backend](009-hermes-backend.md) describes the backend.
 - Decision: the Hermes backend gets the same effective permission as a DSH worker. A different backend must not
   produce a different permission outcome for the same Ticket.
 - Code: [`src/executor/hermes-permissions.ts`](../src/executor/hermes-permissions.ts), tested by
-  [`tests/hermes-permissions.spec.ts`](../tests/hermes-permissions.spec.ts).
+  [`tests/hermes-permissions.spec.ts`](../tests/hermes-permissions.spec.ts); the ACP client and Executor consume it in
+  [`src/executor/acp.ts`](../src/executor/acp.ts) and [`src/executor/hermes.ts`](../src/executor/hermes.ts).
 
 ## Why
 
@@ -64,22 +65,17 @@ On the machine that runs the backend profile (2026-11-15):
 The backend profile also has `approvals.mode: off` as a profile-level backstop for its unattended CLI use. The
 backend process sets the environment explicitly anyway, so the policy does not depend on that profile setting.
 
-## Remaining work
+## How the Executor consumes it
 
-The Executor port still has one implementation, `DshExecutor`; there is no Hermes ACP Executor. A complete Hermes
-backend needs, beyond this policy:
-
-- a long-lived ACP client per Ticket that creates the session in the Ticket directory, delivers the Assignment and
-  later Inputs as prompts, projects `session/update` into progress, and cancels with `session/cancel`;
-- an MCP server that gives Hermes the same `orchestrator_report`, `orchestrator_ack`, thread and handback tools a DSH
-  worker has, so the report and delivery contract does not become a text convention;
-- an `executor.backend` setting and runtime wiring, so a Ticket can choose the backend without changing its report
-  contract;
-- recovery for gateway restarts, the ACP unstable-protocol version and a single-writer Hermes profile shared by
-  concurrent Tickets.
-
-That is a multi-module change, not a local permission change. This document and the module are the permission half;
-the Executor half needs its own implementation.
+- [`HermesAcpExecutor`](../src/executor/hermes.ts) starts the ACP process through `hermesAcpLaunch`, so the
+  environment and command cannot drift from this policy.
+- [`AcpProcess`](../src/executor/acp.ts) answers every `session/request_permission` with
+  `chooseHermesPermissionOption`, and the executor sets `HERMES_FULL_EDIT_MODE` on each session.
+- Each session receives the `orchestrator_*` tools through the loopback MCP bridge
+  ([`src/executor/hermes-bridge.ts`](../src/executor/hermes-bridge.ts)), so the report and delivery contract is the
+  same contract a DSH worker writes, not a text convention.
+- The backend is selected per Ticket by `executor.backend`; a Ticket's `Execution.runtime` fixes the choice when it is
+  accepted, and repository Tickets always use the DSH Executor.
 
 ## Security
 
