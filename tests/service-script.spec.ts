@@ -65,6 +65,35 @@ async function answering(state: unknown = READY, always = false): Promise<string
 }
 const status = async (profile: string, url = 'http://127.0.0.1:9') =>
   JSON.parse((await run('status', '--profile', profile, '--url', url)).stdout) as { pids: number[]; manually_stopped: boolean }
+/** Read the detached restart's result once its helper has written it. */
+async function restartResult(timeout = 15_000): Promise<Record<string, unknown>> {
+  const path = join(control('superagent'), 'restart-result.json')
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    if (existsSync(path)) {
+      try { return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown> } catch { /* still being written */ }
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  throw new Error(`restart-result.json did not appear at ${path}`)
+}
+
+/** Wait until the detached helper has forked into its own session, and return its log path. */
+async function restartLog(timeout = 15_000): Promise<string> {
+  const directory = control('superagent')
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    if (existsSync(directory)) {
+      for (const name of readdirSync(directory).filter(name => /^restart-\d{8}-\d{6}-\d+\.log$/.test(name)).sort()) {
+        try {
+          if (readFileSync(join(directory, name), 'utf8').includes('in a new session')) return join(directory, name)
+        } catch { /* still being written */ }
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  throw new Error('The detached helper did not start a new session')
+}
 
 it('refuses to stop when two processes serve the profile, before it writes the stop marker', async () => {
   processes(service(sleeper()), `${sleeper()} node node /opt/dsh --profile=superagent`)
@@ -178,6 +207,53 @@ it('restarts the service, and a restart whose graceful stop timed out does not k
   expect(await run('restart', '--url', url, '--timeout', '10', '--stop-timeout', '1'))
     .toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })
   expect(await status('superagent')).toMatchObject({ manually_stopped: false })
+}, 20_000)
+it('restarts once from a detached helper and lets a process supervisor start the service again', async () => {
+  const url = await answering(READY, true)
+  const old = sleeper(), replacement = sleeper()
+  // The replacement appears only after the old process exits, as a supervisor's single relaunch does.
+  processes(service(old), `after:${old} ${service(replacement)}`)
+  const asked = Date.now()
+  expect(await run('restart', '--detached', '--supervisor-timeout', '10', '--url', url))
+    .toMatchObject({ code: 0, stdout: expect.stringContaining('Detached restart started') })
+  // The caller returns at once instead of waiting for the service it stops.
+  expect(Date.now() - asked).toBeLessThan(5_000)
+  const result = await restartResult()
+  expect(result).toMatchObject({ oldPids: [old], newPids: [replacement], supervised: true, code: 0, runtime: 'ready' })
+  expect(() => process.kill(old, 0)).toThrow()
+  // A signaled supervisor already started the only new process, so the helper must not add a tmux one.
+  expect(existsSync(join(root, 'tmux.log'))).toBe(false)
+}, 20_000)
+it('starts the service through tmux when no supervisor starts it after a detached stop', async () => {
+  const url = await answering()
+  const old = sleeper(), pid = sleeper()
+  processes(service(old))
+  writeFileSync(join(root, 'pane'), `${pid}\n`)
+  started(service(pid))
+  expect(await run('restart', '--detached', '--supervisor-timeout', '1', '--stop-timeout', '5', '--url', url, '--timeout', '10'))
+    .toMatchObject({ code: 0 })
+  const result = await restartResult()
+  expect(result).toMatchObject({ oldPids: [old], newPids: [pid], supervised: false, code: 0, runtime: 'ready' })
+  expect(readFileSync(join(root, 'tmux.log'), 'utf8')).toContain('new-session')
+}, 20_000)
+it('keeps the restart alive after its caller\'s process group is killed', async () => {
+  const url = await answering(READY, true)
+  const old = sleeper(), replacement = sleeper()
+  processes(service(old), `after:${old} ${service(replacement)}`)
+  const script = join(root, 'scripts', 'dsh-superagent')
+  // This wrapper stands in for the deployment Session whose shutdown ends the caller. It keeps the test's stubbed
+  // ps, tmux and dsh on PATH and clears the production profile and URL, as `run` does, so the helper cannot find
+  // or signal a real service.
+  const caller = spawn('bash', ['-c', `python3 ${JSON.stringify(script)} restart --detached --supervisor-timeout 10 --url ${url} && exec sleep 60`],
+    { detached: true, stdio: 'ignore', env: { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`,
+      DSH_SUPERAGENT_PROFILE: '', DSH_SUPERAGENT_URL: '' } })
+  sleepers.push(caller)
+  await restartLog()
+  process.kill(-caller.pid!, 'SIGKILL')
+  const result = await restartResult()
+  expect(result).toMatchObject({ oldPids: [old], newPids: [replacement], supervised: true, code: 0 })
+  expect(() => process.kill(old, 0)).toThrow()
+  expect(() => process.kill(replacement, 0)).not.toThrow()
 }, 20_000)
 it('refuses a second control operation while one holds the profile\'s lock', async () => {
   mkdirSync(control('superagent'), { recursive: true })
