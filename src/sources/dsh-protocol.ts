@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { key, type Trigger } from '../core/index.ts'
 
 export const DSH_VERSION = 1 as const
+/** The one fixed subdirectory of the Voice user workspace owned by Superagent; nothing outside it receives deliveries. */
+export const DSH_WORKSPACE_SUBDIR = 'superagent'
 const opaque = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/)
 export const DshReferenceSchema = z.object({ sessionId: z.string().min(1).max(256), messageId: z.string().min(1).max(256),
   eventSeq: z.number().int().nonnegative() }).strict()
@@ -49,7 +51,7 @@ export const DshHistoryRequestSchema = z.object({ version: z.literal(DSH_VERSION
     ? !!value.message && !value.cursor : !value.message, { message: 'History selection must match its part' })
 const relativeArtifactPath = z.string().trim().min(1).max(300)
   .refine(path => !path.startsWith('/') && !path.startsWith('\\') && !/^[A-Za-z]:[\\/]/.test(path) && !path.split(/[\\/]/).includes('..'),
-    'Artifact paths are relative to the delivery directory, without ".."')
+    'Artifact paths must be relative, without ".."')
 /** The structured result of a delegated task: what it delivered, how it was verified, and what remains done by whom. */
 export const DshResultSchema = z.object({
   kind: z.enum(['answer', 'artifact', 'changes', 'attention', 'blocked']),
@@ -79,6 +81,10 @@ export type DshReply = z.infer<typeof DshReplySchema>
 export const DshDeliverySchema = z.object({ version: z.literal(DSH_VERSION), replyId: z.string().min(1).max(256),
   status: z.enum(['received', 'gone']) }).strict()
 export const isDshSource = (source: string) => source === 'dsh' || source.startsWith('dsh-')
+/** The Voice workspace-relative directory of one ticket's deliverables: `superagent/<ticket name>`. */
+export const dshDeliveryPath = (ticketName: string) => `${DSH_WORKSPACE_SUBDIR}/${ticketName}`
+/** Maps a report artifact path, relative to a ticket's delivery directory, to the Voice workspace-relative path the result envelope carries. */
+export const dshArtifactPath = (ticketName: string, artifactPath: string) => `${dshDeliveryPath(ticketName)}/${artifactPath}`
 export const sameReference = (a: DshReference, b: DshReference) => a.sessionId === b.sessionId
   && a.messageId === b.messageId && a.eventSeq === b.eventSeq
 export const dshTriggerId = (source: string, request: DshHandoff) =>

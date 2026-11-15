@@ -1,11 +1,11 @@
 /** DSH Voice Source: authenticated explicit handoffs, bounded original dialogue reads and durable Channel delivery. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { key, type Trigger } from '../core/index.ts'
 import { dshHandoff, dshOriginKey, dshRequestKey, dshTrigger, DshDeliverySchema, DshHandoffSchema, DshHistorySchema,
-  DshHistoryRequestSchema, DshReplySchema, DshReferenceSchema, DSH_VERSION, sameReference, type DshReceived } from './dsh-protocol.ts'
+  DshHistoryRequestSchema, DshReplySchema, DshReferenceSchema, DSH_VERSION, DSH_WORKSPACE_SUBDIR, sameReference, type DshReceived } from './dsh-protocol.ts'
 import { dshAuthorized, dshBaseUrl, DSH_MAX_BYTES, dshPost, dshToken } from './dsh-transport.ts'
 import { sourceContext, type SourceContext } from './host.ts'
 import type { SourceKind } from './kind.ts'
@@ -67,14 +67,15 @@ export const dshKind: SourceKind<DshConfig> = {
       type: 'text' as const, label: { zh: field, en: field } })),
     { key: 'sharedSources', type: 'rows', label: { zh: '明确允许继续的其他来源', en: 'Explicitly shared source instances' },
       columns: [{ key: 'source', type: 'text', label: { zh: '来源 ID', en: 'Source ID' } }] },
-    { key: 'deliveryWorkspace', type: 'text', label: { zh: '非 PR 产物目录', en: 'Delivery workspace' },
-      hint: { zh: '非 PR 结果的产物落点，通常是 Voice 用户工作区。工单执行环境以 DSH_SUPERAGENT_DELIVERY_DIR 暴露，report 里的路径相对它；留空则用工单目录', en: 'Where non-PR results write artifacts, usually the Voice user workspace. Exposed to the ticket as DSH_SUPERAGENT_DELIVERY_DIR; report paths are relative to it. Empty uses the ticket directory' } },
+    { key: 'deliveryWorkspace', type: 'text', label: { zh: '语音用户工作区', en: 'Voice user workspace' },
+      hint: { zh: 'Voice 用户工作区的绝对路径，交付目录以它为锚：每个工单的成品写到 `<它>/superagent/<工单名>/`。执行环境把该工单目录暴露为 DSH_SUPERAGENT_DELIVERY_DIR，report 里的路径相对它；留空则用工单目录', en: 'Absolute Voice user workspace that anchors deliveries: a ticket\'s finished files go to `<it>/superagent/<ticket name>/`. The execution environment exposes that ticket directory as DSH_SUPERAGENT_DELIVERY_DIR, and report paths are relative to it. Empty uses the ticket directory' } },
     { key: 'timeoutMs', type: 'number', advanced: true, min: 100, max: 30000, label: { zh: '读取超时 / 毫秒', en: 'Read timeout / ms' } },
     { key: 'maxReaders', type: 'number', advanced: true, min: 1, max: 4, label: { zh: '并发原文读取上限', en: 'Concurrent history reads' } },
   ],
   environment: {
-    variables: [{ key: 'DSH_SUPERAGENT_DELIVERY_DIR', description: { zh: '这个 Voice 工单的产物目录；非 PR 结果写在这里，report 的 artifacts 以它为相对根。不是 Voice 来源的工单为空', en: 'The artifact directory for this Voice ticket; a non-PR result writes here and its report paths are relative to it. Empty for a ticket not from this Voice binding' } }],
-    values: ({ config, source, trigger }) => ({ DSH_SUPERAGENT_DELIVERY_DIR: trigger?.source === source ? config.deliveryWorkspace : '' }),
+    variables: [{ key: 'DSH_SUPERAGENT_DELIVERY_DIR', description: { zh: '这个 Voice 工单的交付目录 `<语音用户工作区>/superagent/<工单名>`；只放成品，report 的 artifacts 以它为相对根。不是 Voice 来源的工单为空', en: 'This Voice ticket\'s delivery directory, `<Voice workspace>/superagent/<ticket name>`; finished deliverables only, and report artifact paths are relative to it. Empty for a ticket not from this Voice binding' } }],
+    values: ({ config, source, trigger, ticket }) => ({ DSH_SUPERAGENT_DELIVERY_DIR: trigger?.source === source && config.deliveryWorkspace && ticket?.name
+      ? join(config.deliveryWorkspace, DSH_WORKSPACE_SUBDIR, ticket.name) : '' }),
   }, health: ['dsh'],
   scope({ meta }, config) { return configured(config) && meta.bindingId === config.bindingId && meta.principalId === config.principalId
     ? { listened: true, observed: false } : { listened: false, reason: 'dsh_binding_unavailable' } },
