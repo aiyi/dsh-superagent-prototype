@@ -24,6 +24,8 @@ An `idle` Ticket has finished its turn without an outstanding question. A Trigge
 
 Each Ticket gets an Executor Session named `worker-<ticket id>` and a directory named after the Ticket's short name. Directories are created under the configured execution root, which defaults to `<stateDir>/work`.
 
+A deployment may run workspace-only Tickets in a Hermes profile over ACP instead of a DSH Session; `executor.backend` chooses, the default is DSH, repository Tickets always use DSH, and the choice is fixed in `Execution.runtime` when the Ticket is accepted. A Hermes Ticket gets the same report tools through a loopback MCP bridge and the same full permissions; its ACP session's working directory is the Ticket directory. The Hermes backend document covers the backend in full.
+
 Executor Sessions run commands without approval as the operator's OS user. Their `dsh-superagent-worker` preset contains the tools needed for work and moves foreground shell commands to background jobs after 5 seconds. This lets a worker receive new messages at the next step instead of waiting for a long command to finish.
 
 The main Session uses `dsh-superagent-router`, with the same 5-second shell and job-wait limits and a smaller tool set for routing. Sessions retain the preset selected at creation. Worker subagents use DeepSeek Harness's `standard` preset.

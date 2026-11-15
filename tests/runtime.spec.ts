@@ -203,7 +203,19 @@ beforeEach(async () => {
     inspect: vi.fn(async () => ({ events: [] })),
   }
   jobs = jobRegistry()
-  services = { agents, llm: { resolveCallConfig: vi.fn(async value => value) }, sessionController: controller, sessionPersistence: { flush: vi.fn(async () => {}), open: vi.fn(async () => ({ read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} })) }, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) }, permissionPresets: { set: () => {} }, subprocess, webServer: { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }, jobs: jobs.service }
+  const routes: { kind: 'exact' | 'prefix'; path: string; handler: HttpHandler }[] = []
+  const webServer = { host: '127.0.0.1', port: 3082, register: (route: { kind: 'exact' | 'prefix'; path: string; handler: HttpHandler }) => {
+    routes.push(route)
+    http = async (req, res) => {
+      const path = new URL(String((req as { url?: string }).url ?? '/'), 'http://127.0.0.1').pathname
+      const found = [...routes].reverse().find(entry => entry.kind === 'prefix'
+        ? path === entry.path || path.startsWith(`${entry.path}/`) : path === entry.path)
+      if (!found) throw new Error(`No test HTTP route for ${path}`)
+      await found.handler(req, res)
+    }
+    return () => { const at = routes.indexOf(route); if (at >= 0) routes.splice(at, 1) }
+  } }
+  services = { agents, llm: { resolveCallConfig: vi.fn(async value => value) }, sessionController: controller, sessionPersistence: { flush: vi.fn(async () => {}), open: vi.fn(async () => ({ read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} })) }, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) }, permissionPresets: { set: () => {} }, subprocess, webServer, jobs: jobs.service }
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   for (const cli of [AGENT(), OTHER(), BOT()]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const store = new Store(join(directory, 'orchestrator.sqlite')); seed(store); store.close()

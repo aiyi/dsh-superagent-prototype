@@ -13,8 +13,12 @@ export interface EffectPayloads {
   assessment: { triggerId: string }
   /** Launch a pending Assignment; the key is the Assignment ID. */
   launch: { ticketId: string; assignmentId: string }
+  /** Launch a pending Assignment of a Ticket the Hermes ACP backend runs; the key is the Assignment ID. */
+  'hermes-launch': { ticketId: string; assignmentId: string }
   /** Hand a ticket's waiting Inputs to its running Assignment; the key is the Ticket ID. */
   delivery: { ticketId: string }
+  /** Hand a Hermes ACP ticket's waiting Inputs to its running Assignment; the key is the Ticket ID. */
+  'hermes-delivery': { ticketId: string }
   /** Steer a report or a candidate into the main Session; the key is the request ID. */
   relay: { text: string }
   /** Inject a notice into the main Session without waking it; the key names what it reports, such as `prompts`. */

@@ -22,6 +22,9 @@ import { environmentOf, ticketEnvironment, type Variable } from './execution-env
 import { sourceOfRepository } from '../deployment.ts'
 import type { SetupProblem } from '../setup.ts'
 import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/dsh.ts'
+import { HermesAcpExecutor } from '../executor/hermes.ts'
+import { hermesBridgeToken, registerHermesBridge } from '../executor/hermes-bridge.ts'
+import { TicketExecutor } from '../executor/route.ts'
 import { ticketCard } from './cards.ts'
 import { MasterAssessor } from './assessment.ts'
 import { KV } from '../kv.ts'
@@ -66,7 +69,7 @@ export class Runtime extends Service implements SourceHost {
   readonly commands: Commands
   readonly sessions: Sessions
   readonly settings: Settings
-  readonly executor: DshExecutor
+  readonly executor: TicketExecutor
   readonly assessor: MasterAssessor
   readonly outbox: Outbox
   readonly engine: Engine
@@ -83,6 +86,8 @@ export class Runtime extends Service implements SourceHost {
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
+  /** The private bearer token of the Hermes MCP bridge, stable across restarts so resumed ACP sessions reattach. */
+  private readonly hermesToken: string
   /** Non-zero while a main-Session tool is executing an Engine command, suppressing self-triggered domain event notices. */
   private quiet = 0
   constructor(ctx: Context, readonly machine: Machine, restart: () => void) {
@@ -97,6 +102,8 @@ export class Runtime extends Service implements SourceHost {
     try {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
+      // Read or create the bridge token before any Hermes session can be started, so a restart resumes with the same secret.
+      this.hermesToken = hermesBridgeToken(machine.stateDir)
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
@@ -133,10 +140,17 @@ export class Runtime extends Service implements SourceHost {
       const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
       this.settings = new Settings({ store, sources, engine: { policyChanged }, health: board, context: ctx, lifetime: this.lifetime, sessions,
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
-      this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
-        lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
-        repositoryOf: source => setup.deployment.repositories[source ?? 'github'] ?? setup.deployment.repository,
-        repliedTo: trigger => repliedTo({ store, sources }, trigger) })
+      this.executor = new TicketExecutor(
+        new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
+          lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
+          repositoryOf: source => setup.deployment.repositories[source ?? 'github'] ?? setup.deployment.repository,
+          repliedTo: trigger => repliedTo({ store, sources }, trigger) }),
+        new HermesAcpExecutor({ get engine() { return runtime.engine }, store, effects, health: board.claim('hermes'), machine,
+          lifetime: this.lifetime, environment, closing: () => this.closing(), paused: () => this.paused(),
+          workerPrompt: ticket => this.prompts.compose(this.prompts.current().config, 'worker', this.ticketEnvironment(ticket)),
+          bridgeUrl: `http://127.0.0.1:${ctx.webServer.port}`, token: this.hermesToken,
+          sourceLink: link, repliedTo: trigger => repliedTo({ store, sources }, trigger) }),
+        () => store.settings())
       this.assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands, get deployment() { return setup.deployment }, effects,
         settings: () => store.settings(), paused: () => this.paused(), threadContext: trigger => sources.threadContext(trigger),
         deliver: (id, text) => sessions.prompt(masterId, id, text, 'steer'), candidateCard: candidate => candidateCard(links, candidate) })
@@ -216,6 +230,8 @@ export class Runtime extends Service implements SourceHost {
   private async initialize(): Promise<void> {
     // Register management HTTP routes before setup completes so operators can fix setup problems in the UI.
     this.disposers.push(registerHttp(this.ctx, this.httpHost()))
+    // The Hermes MCP bridge is independent of setup: it exists so a resumed ACP session can still reach its Ticket's tools.
+    this.disposers.push(registerHermesBridge(this.ctx, { store: this.store, tools: ticket => executorTools(this.toolHost, ticket) }, this.hermesToken))
     if (!await this.setup.run(this.store.settings())) {
       this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now() })
       return

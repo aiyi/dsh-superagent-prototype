@@ -29,12 +29,14 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [006 Deployment](docs/006-deployment.md): manual setup, configuration, upgrades and troubleshooting
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
+- [009 Hermes ACP backend](docs/009-hermes-backend.md): an optional, switchable execution backend for work unrelated to any repository; ACP sessions, full permissions, the MCP report bridge and deployment checks
 
 ## Design notes
 
 - [DSH Source and Voice channel integration](docs/dsh-source-design.md): the Superagent Source is implemented for separate DSH Host processes; the Voice peer and joint verification remain. Links to the shared architecture proposal.
 - [Multi-repository support](docs/multi-repository-design.md): one deployment for several GitHub repositories, one repository per Ticket. Phase 1 is implemented; a Ticket across several repositories is still a proposal.
 - [Voice delivery contract](docs/voice-delegation-delivery-contract.md): a stable result shape for delegated Voice work, including non-PR artifacts.
+- [Hermes backend permissions](docs/hermes-backend-permissions.md): the full-permission policy for a Hermes ACP execution backend, and what the Executor still needs before it can run Tickets.
 
 ## Development
 
