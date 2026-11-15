@@ -35,6 +35,7 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [DSH Source and Voice channel integration](docs/dsh-source-design.md): the Superagent Source is implemented for separate DSH Host processes; the Voice peer and joint verification remain. Links to the shared architecture proposal.
 - [Multi-repository support](docs/multi-repository-design.md): one deployment for several GitHub repositories, one repository per Ticket. Phase 1 is implemented; a Ticket across several repositories is still a proposal.
 - [Voice delivery contract](docs/voice-delegation-delivery-contract.md): a stable result shape for delegated Voice work, including non-PR artifacts.
+- [Hermes backend permissions](docs/hermes-backend-permissions.md): the full-permission policy for a Hermes ACP execution backend, and what the Executor still needs before it can run Tickets.
 
 ## Development
 
