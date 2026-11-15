@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import WebServer, { type WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { apply, acceptDsh, DshConfigSchema, dshKind, type DshConfig } from '../src/sources/dsh.ts'
+import { apply, acceptDsh, DSH_CONTEXT_WINDOW, DshConfigSchema, dshKind, type DshConfig } from '../src/sources/dsh.ts'
 import { DshHandoffSchema, DshReplySchema, dshHandoff, dshTrigger, type DshHandoff, type DshPage } from '../src/sources/dsh-protocol.ts'
 import { dshPost, dshToken, DSH_MAX_BYTES } from '../src/sources/dsh-transport.ts'
 import { sourceContext } from '../src/sources/host.ts'
@@ -88,8 +88,15 @@ async function admitted(id: string, title = id) {
 const read = (resource: string, session = h.runtime.masterId, offset = 0, limit?: number) =>
   h.runTool(session, 'orchestrator_read', { resource, offset, ...(limit ? { limit } : {}) })
 async function original(resource: string, session?: string) {
-  const result = await read(resource, session)
-  return JSON.parse(String(result.text)) as Record<string, unknown>
+  // Read the whole JSON response: a page larger than the text limit is reassembled from next_offset, as a reader does.
+  let text = '', offset = 0
+  for (;;) {
+    const result = await read(resource, session, offset, 8000) as { text: string; next_offset: number | null }
+    text += result.text
+    if (result.next_offset === null) break
+    offset = result.next_offset
+  }
+  return JSON.parse(text) as Record<string, unknown>
 }
 
 it('serves authenticated handoffs through the real native Web Server prefix matcher', async () => {
@@ -208,6 +215,51 @@ it('reads bounded older pages through the fixed snapshot and refuses mismatched 
   await expect(original(String(first.next_resource))).rejects.toThrow('different snapshot')
   badHistory = false; hugeHistory = true
   await expect(original(String(first.next_resource))).rejects.toThrow('size limit')
+})
+
+it('serves the newest dialogue messages first, then the whole frozen window on read more', async () => {
+  const request = handoff('window')
+  const messages = Array.from({ length: DSH_CONTEXT_WINDOW + 4 }, (_, index) => ({ ...request.anchor,
+    ref: { ...request.anchor.ref, messageId: `history-${index}`, eventSeq: index + 1 },
+    text: index === DSH_CONTEXT_WINDOW + 3 ? request.anchor.text : `message ${index}` }))
+  request.anchor = messages.at(-1)!; request.snapshot.page.messages = messages
+  const { value } = await submit(request); await h.runtime.idle()
+  const first = await original(`dsh/${value.triggerId}/context`)
+  const texts = (result: Record<string, unknown>) => (result.messages as { text: string }[]).map(message => message.text)
+  expect(texts(first)).toEqual(messages.slice(-DSH_CONTEXT_WINDOW).map(message => message.text))
+  expect(first).toMatchObject({ complete: false })
+  expect(histories).toEqual([])
+  const second = await original(String(first.next_resource))
+  expect(texts(second)).toEqual(messages.map(message => message.text))
+  expect(second).toMatchObject({ complete: true })
+  expect(second).not.toHaveProperty('next_resource')
+  expect(histories).toEqual([])
+})
+
+it('serves the whole frozen window after its preview, then the older Voice page whole', async () => {
+  const request = handoff('window-then-older'); request.snapshot.page.complete = false; request.snapshot.page.nextCursor = 'older'
+  const frozen = Array.from({ length: DSH_CONTEXT_WINDOW + 2 }, (_, index) => ({ ...request.anchor,
+    ref: { ...request.anchor.ref, messageId: `frozen-${index}`, eventSeq: index + 1 },
+    text: index === DSH_CONTEXT_WINDOW + 1 ? request.anchor.text : `frozen ${index}` }))
+  request.anchor = frozen.at(-1)!; request.snapshot.page.messages = frozen
+  const older = handoff('older')
+  const remoteMessages = Array.from({ length: 4 }, (_, index) => ({ ...older.anchor,
+    ref: { ...older.anchor.ref, messageId: `older-${index}`, eventSeq: index + 1 }, text: `older ${index}` }))
+  page = { messages: remoteMessages, complete: true, missing: [] }
+  const { value } = await submit(request); await h.runtime.idle()
+  const first = await original(`dsh/${value.triggerId}/context`)
+  const texts = (result: Record<string, unknown>) => (result.messages as { text: string }[]).map(message => message.text)
+  expect(texts(first)).toEqual(frozen.slice(-DSH_CONTEXT_WINDOW).map(message => message.text))
+  expect(histories).toEqual([])
+  const second = await original(String(first.next_resource))
+  expect(texts(second)).toEqual(frozen.map(message => message.text))
+  expect(second.next_resource).toBeTruthy()
+  expect(histories).toEqual([])
+  const third = await original(String(second.next_resource))
+  expect(texts(third)).toEqual(remoteMessages.map(message => message.text))
+  expect(third).toMatchObject({ complete: true })
+  expect(histories).toHaveLength(1)
+  expect(histories[0]).toMatchObject({ cursor: 'older' })
 })
 
 it('caps simultaneous remote history reads without making the initial local dialogue wait', async () => {

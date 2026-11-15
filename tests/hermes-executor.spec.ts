@@ -115,7 +115,7 @@ function harness(options: { runtimes?: 'hermes'; ended?: boolean; inputs?: Ticke
 }
 
 describe('HermesAcpExecutor', () => {
-  it('launches an ACP session in the ticket directory with the report bridge and sends the worker prompt', async () => {
+  it('launches an ACP session in the ticket directory with the report bridge and sends the titled worker prompt', async () => {
     const h = harness()
     h.executor.start(h.ticket, h.assignment)
     expect(h.enqueued).toEqual([{ kind: 'hermes-launch', key: 'a1', payload: { ticketId: 'ticket-1', assignmentId: 'a1' } }])
@@ -130,10 +130,21 @@ describe('HermesAcpExecutor', () => {
     expect(h.engine.assignmentStarted).toHaveBeenCalledWith('ticket-1', 'a1')
     expect(h.executor.activeCount()).toBe(1)
     const text = h.connection.prompts[0]!.text
+    expect(text.split('\n')[0]).toBe('Write the summary')
+    expect(text.slice(0, 1000)).toContain('Write the summary')
     expect(text).toContain('WORKER PROMPT')
     expect(text).toContain('## Execution backend: Hermes ACP')
     expect(text).toContain('DSH_SUPERAGENT_DELIVERY_DIR="/delivery"')
     expect(text).toContain('"ticket_id":"ticket-1"')
+  })
+
+  it('leads the first prompt with a normalized Ticket title so Hermes names the session after it', async () => {
+    const h = harness()
+    h.ticket.title = '根据报告 PDF\n生成 10 页 PPT'
+    await h.handlers.get('hermes-launch')!({ ticketId: 'ticket-1', assignmentId: 'a1' } as never, 'a1')
+    const text = h.connection.prompts[0]!.text
+    expect(text.split('\n')[0]).toBe('根据报告 PDF 生成 10 页 PPT')
+    expect(text).toContain('WORKER PROMPT')
   })
 
   it('turns the end of a turn without a report into a waiting report with the streamed text', async () => {

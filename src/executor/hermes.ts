@@ -350,7 +350,7 @@ export class HermesAcpExecutor {
     }
   }
 
-  /** One Ticket's first prompt: the worker prompt, the backend rules, its execution environment, and its assignment card. */
+  /** One Ticket's first prompt: the Ticket title, then the worker prompt, the backend rules, its environment, and its assignment card. */
   private async assignmentPrompt(ticket: Ticket): Promise<string> {
     const assignment = ticket.execution?.assignment ?? ''
     const brief = assignment.length <= ASSIGNMENT_CHARS ? { assignment } : { assignment: `${assignment.slice(0, ASSIGNMENT_CHARS)}…`,
@@ -363,7 +363,9 @@ export class HermesAcpExecutor {
     const payload = { ticket_id: ticket.id, title: ticket.title, ...brief, ...(card ? { trigger: card } : {}),
       ...(batch.length ? { batch } : {}) }
     const intro = this.host.workerPrompt(ticket).trimEnd()
-    return `${intro}\n\n${BACKEND_RULES}\n\n### Execution environment\n${environment || '(none)'}\n\n---\n${JSON.stringify(payload)}`
+    // Hermes titles the session from the opening message's first 1000 characters, so the Ticket title leads before the generic rules.
+    const title = ticket.title.replace(/\s+/g, ' ').trim() || ticket.id
+    return `${title}\n\n${intro}\n\n${BACKEND_RULES}\n\n### Execution environment\n${environment || '(none)'}\n\n---\n${JSON.stringify(payload)}`
   }
 }
 

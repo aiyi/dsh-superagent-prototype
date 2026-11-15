@@ -5,7 +5,8 @@ import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { key, type Trigger } from '../core/index.ts'
 import { dshHandoff, dshOriginKey, dshRequestKey, dshTrigger, DshDeliverySchema, DshHandoffSchema, DshHistorySchema,
-  DshHistoryRequestSchema, DshReplySchema, DshReferenceSchema, DSH_VERSION, DSH_WORKSPACE_SUBDIR, sameReference, type DshReceived } from './dsh-protocol.ts'
+  DshHistoryRequestSchema, DshReplySchema, DshReferenceSchema, DSH_VERSION, DSH_WORKSPACE_SUBDIR, sameReference,
+  type DshHandoff, type DshPage, type DshReceived } from './dsh-protocol.ts'
 import { dshAuthorized, dshBaseUrl, DSH_MAX_BYTES, dshPost, dshToken } from './dsh-transport.ts'
 import { sourceContext, type SourceContext } from './host.ts'
 import type { SourceKind } from './kind.ts'
@@ -30,33 +31,67 @@ function decode(value: string): string {
   if (encode(decoded) !== value) throw new Error('Invalid DSH resource cursor')
   return decoded
 }
-/** Reads the persisted initial window without involving the Voice process; only continuation or extra messages use HTTP. */
+/** Newest dialogue messages the first context read returns; a read-more then serves the whole frozen window in one read. */
+export const DSH_CONTEXT_WINDOW = 10
+/** Marks the local read of the whole frozen window after its newest-message preview; the Voice cursor stays opaque. */
+const DshContextAllSchema = z.object({ version: z.literal(1), snapshotId: z.string().min(1), requestId: z.string().min(1) }).strict()
+/** Reads the whole-window continuation token, or undefined for a Voice cursor stored by an earlier build. */
+const contextAll = (value: string) => {
+  try { return DshContextAllSchema.parse(JSON.parse(value)) } catch { return undefined }
+}
+/** The original message shape plus the local resource that reads exactly that message. */
+const dialogueMessage = (trigger: Trigger, message: DshPage['messages'][number]) => ({ ...message,
+  read: `dsh/${trigger.id}/message/${encode(JSON.stringify(message.ref))}` })
+/**
+ * Serves one dialogue page in chronological order: only its newest DSH_CONTEXT_WINDOW messages for the first read, the whole page
+ * after a read-more. `next_resource` leads from that preview to the whole frozen window, then to the older page Voice holds before it.
+ */
+function contextPage(trigger: Trigger, request: DshHandoff, page: DshPage, whole: boolean) {
+  const messages = whole ? page.messages : page.messages.slice(-DSH_CONTEXT_WINDOW)
+  const local = !whole && page.messages.length > DSH_CONTEXT_WINDOW
+    ? encode(JSON.stringify({ version: 1, snapshotId: request.snapshot.id, requestId: request.requestId })) : undefined
+  const token = local ?? (page.nextCursor ? encode(page.nextCursor) : undefined)
+  return { snapshotId: request.snapshot.id, messages: messages.map(message => dialogueMessage(trigger, message)),
+    complete: !token, ...(token ? { nextCursor: token, next_resource: `dsh/${trigger.id}/context/${token}` } : {}),
+    missing: page.missing }
+}
+/** Reads the persisted conversation window without involving the Voice process; only continuation or extra messages use HTTP. */
 async function readOriginal(trigger: Trigger, path: string, config: DshConfig, signal?: AbortSignal): Promise<unknown> {
   if (!allowed(trigger, config)) throw new Error('DSH binding is unavailable')
   const request = dshHandoff(trigger), [part, token, ...extra] = path.split('/')
   if (extra.length || !['message', 'context'].includes(part ?? '')) throw new Error('Unknown DSH original resource')
-  let page = request.snapshot.page
-  if (part === 'message' && !token) return { message: request.anchor }
-  if (token) {
-    const selection = part === 'message' ? { message: DshReferenceSchema.parse(JSON.parse(decode(token))) } : { cursor: decode(token) }
-    const local = selection.message && page.messages.find(message => sameReference(message.ref, selection.message!))
+  if (part === 'message') {
+    if (!token) return { message: request.anchor }
+    const selection = { message: DshReferenceSchema.parse(JSON.parse(decode(token))) }
+    const local = request.snapshot.page.messages.find(message => sameReference(message.ref, selection.message))
     if (local) return { message: local }
     const result = DshHistorySchema.parse(await dshPost(config, '/voice-bridge/v1/history', DshHistoryRequestSchema.parse({ version: DSH_VERSION,
       requestId: request.requestId, bindingId: request.bindingId, snapshotId: request.snapshot.id, part, ...selection }), signal))
     if (result.requestId !== request.requestId || result.snapshotId !== request.snapshot.id) throw new Error('Voice returned a different snapshot')
-    page = result.page
-    if (part === 'message' && page.messages.some(message => !sameReference(message.ref, selection.message!))) {
+    if (result.page.messages.some(message => !sameReference(message.ref, selection.message))) {
       throw new Error('Voice returned a different message')
     }
-    if (part === 'message' && (page.messages.length > 1
-      || !page.messages.length && !page.missing.some(ref => sameReference(ref, selection.message!)))) {
+    if (result.page.messages.length > 1
+      || !result.page.messages.length && !result.page.missing.some(ref => sameReference(ref, selection.message))) {
       throw new Error('Voice must return the requested message or explicitly mark it missing')
     }
+    return { snapshotId: request.snapshot.id, ...result.page, messages: result.page.messages.map(message => dialogueMessage(trigger, message)),
+      ...(result.page.nextCursor ? { next_resource: `dsh/${trigger.id}/context/${encode(result.page.nextCursor)}` } : {}) }
   }
-  return { snapshotId: request.snapshot.id, ...page,
-    messages: page.messages.map(message => ({ ...message,
-      read: `dsh/${trigger.id}/message/${encode(JSON.stringify(message.ref))}` })),
-    ...(page.nextCursor ? { next_resource: `dsh/${trigger.id}/context/${encode(page.nextCursor)}` } : {}) }
+  const page = request.snapshot.page
+  if (token) {
+    const whole = contextAll(decode(token))
+    if (whole) {
+      if (whole.snapshotId !== request.snapshot.id || whole.requestId !== request.requestId) throw new Error('Voice returned a different snapshot')
+      return contextPage(trigger, request, page, true)
+    }
+    const cursor = decode(token)
+    const result = DshHistorySchema.parse(await dshPost(config, '/voice-bridge/v1/history', DshHistoryRequestSchema.parse({ version: DSH_VERSION,
+      requestId: request.requestId, bindingId: request.bindingId, snapshotId: request.snapshot.id, part, cursor }), signal))
+    if (result.requestId !== request.requestId || result.snapshotId !== request.snapshot.id) throw new Error('Voice returned a different snapshot')
+    return contextPage(trigger, request, result.page, true)
+  }
+  return contextPage(trigger, request, page, false)
 }
 export const dshKind: SourceKind<DshConfig> = {
   kind: 'dsh', title: { zh: '语音对话', en: 'Voice dialogue' },

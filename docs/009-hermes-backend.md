@@ -35,7 +35,7 @@ TicketExecutor ── repository/DSH Ticket ──▶ DshExecutor (unchanged)
                                                  ├─ AcpProcess: `hermes -p <profile> acp` (stdio JSON-RPC)
                                                  │      session/new  cwd = Ticket directory
                                                  │      session/resume  the stored session, after a restart
-                                                 │      session/prompt  the worker prompt + assignment
+                                                 │      session/prompt  the Ticket title, worker prompt + assignment
                                                  │      session/cancel  a stop
                                                  │      permission requests  answered allow
                                                  │
@@ -48,6 +48,10 @@ TicketExecutor ── repository/DSH Ticket ──▶ DshExecutor (unchanged)
   its `cwd`, so Hermes' file, shell and search tools start there. The session ID is
   stored in KV (`hermes-session:<ticket id>`) and resumed after a restart, so a
   follow-up on the same Ticket continues the same Hermes conversation.
+- **The title leads the first prompt.** Hermes derives a session title from the
+  opening message's first 1000 characters, so the first prompt starts with the
+  Ticket title before the generic worker rules; a long policy prompt can no longer
+  name the session after unrelated instructions.
 - **The profile keeps identity.** Hermes reads its `SOUL.md`, memory, skills and
   session history from the profile home; those are profile-wide, not per Ticket. The
   Ticket directory is only the session's working directory, not a sandbox.

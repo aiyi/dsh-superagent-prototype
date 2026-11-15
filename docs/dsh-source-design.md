@@ -67,7 +67,10 @@ All envelopes reject unknown fields and unsupported versions.
 uses `Authorization: Bearer <incoming credential>` and a `DshHandoffSchema` body.
 The body includes version, requestId, bindingId, the exact human anchor and a
 frozen snapshot with its bounded initial dialogue page.
-The initial page must contain the unchanged human anchor. Original physical
+The initial page must contain the unchanged human anchor.
+The page may hold up to 40 messages; the first context read serves only the
+newest ten, and a read-more serves the whole frozen window in one chronological
+read, so what the Router sees by default stays small. Original physical
 Session/message/event references survive daily rotation.
 
 Received requests have one independent Source Thread each. Only the anchor
@@ -99,16 +102,20 @@ Both the main Session and authorized workers use existing `orchestrator_read`:
 | Resource | Result |
 | --- | --- |
 | dsh/<trigger-id>/message | Original human anchor |
-| dsh/<trigger-id>/context | Persisted initial dialogue window; no Voice HTTP request |
+| dsh/<trigger-id>/context | Newest few messages of the persisted initial dialogue window, chronologically; no Voice HTTP request |
 | returned message read reference | Exact message in that authorized snapshot, local when already retained |
-| returned next_resource | Older dialogue page fetched from the fixed Voice origin |
+| returned next_resource | The whole frozen window in one read, then older dialogue pages fetched from the fixed Voice origin |
 | dsh/<trigger-id>/tickets | Main Session only: indexed binding/explicitly shared-source candidates, including ended work |
 
 Follow next_offset for text/list pagination and next_resource for history
-continuation. Ticket candidate lookups use indexed source/principal metadata
-and bounded SQL pages, not full Ticket JSON loading. Router selection still
-uses original dialogue; the only running Ticket is never an implicit target.
-Workers cannot read other Tickets' dialogue or the main Session's candidate list.
+continuation. The first context read returns the newest ten messages; a
+read-more returns the whole frozen window in one chronological read, then older
+pages. The Router expands only while the request is still unclear, so it does
+not pull the whole conversation or pass it on by default. Ticket candidate
+lookups use indexed source/principal metadata and bounded SQL pages, not full
+Ticket JSON loading. Router selection still uses original dialogue; the only
+running Ticket is never an implicit target. Workers cannot read other Tickets'
+dialogue or the main Session's candidate list.
 
 Only `human/user`, `assistant/voice-agent`, and
 `notification/dsh-superagent` final dialogue records are accepted. Tool calls,
