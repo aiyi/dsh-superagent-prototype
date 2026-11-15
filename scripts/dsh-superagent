@@ -156,6 +156,96 @@ def prune_logs(profile):
         path.unlink(missing_ok=True)
 
 
+def prune_restart_logs(profile):
+    """Retain only the newest detached-restart logs for `profile`."""
+    name = re.compile(r'restart-\d{8}-\d{6}-\d+\.log')
+    logs = sorted((path for path in control(profile).iterdir() if name.fullmatch(path.name)), key=lambda path: path.stat().st_mtime)
+    for path in logs[:-KEEP_LOGS]:
+        path.unlink(missing_ok=True)
+
+
+def restart_detached(args):
+    """Restart once from a detached helper: stop, wait for a supervisor's new process, then start it through tmux if none came."""
+    result = {'profile': args.profile, 'url': args.url, 'oldPids': [], 'newPids': [], 'supervised': False,
+              'code': 1, 'health': None, 'errors': {}, 'setup': None, 'error': None, 'at': None}
+    try:
+        pids = processes(args.profile)
+        if len(pids) > 1:
+            raise RuntimeError('Multiple dsh-superagent processes found; refusing to choose one.')
+        result['oldPids'] = pids
+        if pids:
+            stop(args)
+            # A process supervisor such as launchd restarts an exited service by itself; starting a second instance here
+            # before it does would leave two services. Wait for its single new process, then fall back to tmux.
+            deadline = time.monotonic() + args.supervisor_timeout
+            while time.monotonic() < deadline:
+                found = processes(args.profile)
+                if len(found) > 1:
+                    raise RuntimeError('Multiple dsh-superagent processes found; refusing to choose one.')
+                if found:
+                    result['supervised'] = True
+                    print(f'Process supervisor started PID {found[0]}; not starting another.', flush=True)
+                    break
+                time.sleep(0.5)
+            else:
+                print(f'No new process within {args.supervisor_timeout:g}s; starting the service through tmux.', flush=True)
+        result['code'] = start(args)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        result['error'] = str(error)
+        print(str(error), file=sys.stderr, flush=True)
+    try:
+        result['newPids'] = processes(args.profile)
+    except OSError:
+        pass
+    current = state(args.url)
+    result['health'] = current and current['health']
+    result['runtime'] = current and current['health'].get('runtime')
+    result['errors'] = current and current['errors']
+    result['setup'] = current and current['setup']
+    result['at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    path = control(args.profile) / 'restart-result.json'
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+    print('restart helper ' + ('done' if result['code'] == 0 else 'failed'), flush=True)
+    print('Result: ' + str(path), flush=True)
+    return result['code']
+
+
+def detach(args):
+    """Start the restart in its own session so the service it stops cannot end it, and return at once."""
+    directory = control(args.profile)
+    log = directory / f'restart-{time.strftime("%Y%m%d-%H%M%S")}-{os.getpid()}.log'
+    log.touch()
+    prune_restart_logs(args.profile)
+    result = directory / 'restart-result.json'
+    result.unlink(missing_ok=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        pid = os.fork()
+    except OSError as error:
+        raise RuntimeError(f'Could not detach the restart: {error}') from None
+    if pid:
+        print(f'Detached restart started (PID {pid}). Log: {log}', flush=True)
+        print(f'Result: {result}', flush=True)
+        return 0
+    # The helper owns a new session, so a supervisor that stops or kills the service's process group does not reach it.
+    os.setsid()
+    out = os.open(log, os.O_WRONLY | os.O_APPEND)
+    null = os.open(os.devnull, os.O_RDONLY)
+    for source, target in ((null, 0), (out, 1), (out, 2)):
+        os.dup2(source, target)
+    os.close(null)
+    os.close(out)
+    print(f'Restart helper {os.getpid()} in a new session.', flush=True)
+    code = 1
+    try:
+        code = restart_detached(args)
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(code)
+
+
 def start(args):
     session = 'dsh-' + args.profile
     pids = processes(args.profile)
@@ -216,11 +306,17 @@ def main():
     parser.add_argument('--timeout', type=float, default=60, help='Startup timeout in seconds.')
     parser.add_argument('--stop-timeout', type=float, default=300,
                         help='Graceful shutdown timeout in seconds; running Executor Sessions finish their step first.')
+    parser.add_argument('--detached', action='store_true',
+                        help='For restart: run it in a detached session so it survives stopping this service; return at once with its log and result paths.')
+    parser.add_argument('--supervisor-timeout', type=float, default=20,
+                        help='For a detached restart: seconds to wait for the service supervisor to start the service again before starting it through tmux.')
     parser.add_argument('--respect-stop', action='store_true',
                         help='For monitoring: never start/restart after an intentional stop.')
     args = parser.parse_args()
-    if args.timeout <= 0 or args.stop_timeout <= 0:
-        parser.error('--timeout and --stop-timeout must be positive')
+    if args.timeout <= 0 or args.stop_timeout <= 0 or args.supervisor_timeout < 0:
+        parser.error('--timeout and --stop-timeout must be positive, and --supervisor-timeout must not be negative')
+    if args.detached and args.action != 'restart':
+        parser.error('--detached only applies to restart')
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', args.profile):
         parser.error('--profile must be a DSH profile name')
     os.umask(0o077)
@@ -234,6 +330,8 @@ def main():
             return 0
         if args.action == 'status':
             return status(args)
+        if args.action == 'restart' and args.detached:
+            return detach(args)
         if args.action in ('stop', 'restart'):
             # Only a stop keeps automatic recovery off; a restart whose stop timed out leaves it on.
             stop(args, intentional=args.action == 'stop')

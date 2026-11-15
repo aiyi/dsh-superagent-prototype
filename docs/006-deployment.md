@@ -108,6 +108,8 @@ scripts/dsh-superagent status
 
 `stop` and `restart` request graceful shutdown and wait up to five minutes for Executors. They never force-kill the process or touch other tmux sessions.
 
+A restart started from inside the service it restarts, such as an upgrade run in an Executor Session, must survive the shutdown it triggers. Use `--detached`: `scripts/dsh-superagent restart --detached` starts the restart in its own session and returns at once with its log and result paths. The helper stops the service, waits `--supervisor-timeout` seconds (20 by default) for a process supervisor such as launchd to start it again, and starts it through tmux only when none does. It writes `.artifacts/control/profiles/<profile>/restart-result.json`, with the old and new pids, whether a supervisor started it, the health it found and the restart's exit code; the command itself exits 0 once the helper starts. Call it as the last step of the turn: the restart ends the Session, and its replacement resumes with a recovery note and reads the result. Do not submit the helper with `launchctl submit`: launchd treats a submitted job as a service to keep running and starts it again after every exit.
+
 `status` prints process ids, health and setup problems. For a different profile or port, use `--profile` and `--url`, or set `DSH_SUPERAGENT_PROFILE` and `DSH_SUPERAGENT_URL`.
 
 `status`, `start` and `restart` exit with one of four codes:
@@ -126,7 +128,7 @@ A Source that is still starting counts as normal operation. So does a Feishu bot
 Each profile stores logs and control files under `.artifacts/`:
 
 - Startup logs: `dsh-superagent-<profile>-<date>-<time>-<pid>.log`, where the pid belongs to the script. The newest 20 are kept.
-- Control files: `control/profiles/<profile>/`, containing the stop marker, lock and process id.
+- Control files: `control/profiles/<profile>/`, containing the stop marker, lock, process id and the newest detached restart logs and result.
 
 Open the URL printed in the log, then choose **Superagent** in the sidebar.
 
@@ -250,7 +252,7 @@ From an allowed GitHub account, open an Issue or post a comment containing `@<ag
 1. Wait until no Executor is in the middle of a turn.
 2. Back up `<stateDir>/orchestrator.sqlite`.
 3. Run `git pull && pnpm install && pnpm build`.
-4. Run `scripts/dsh-superagent restart` and inspect its status.
+4. Run `scripts/dsh-superagent restart` and inspect its status. When the upgrade runs inside a Session of the service, use `scripts/dsh-superagent restart --detached` instead: it returns at once, and the helper writes the restart's outcome to `.artifacts/control/profiles/<profile>/restart-result.json` for the Session that resumes after it.
 
 A restart ends running Assignments and starts replacements with recovery notes. Team text and overridden prompt parts are retained; parts without overrides follow the new defaults. Review parts marked **Default updated** after upgrading.
 
