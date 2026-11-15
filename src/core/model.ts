@@ -330,7 +330,9 @@ export interface Ticket {
 export interface Follow { thread: string; own: boolean; closed?: { at: string; outcome: 'merged' | 'closed' } }
 export interface Execution { name: string; directory: string; assignment: string; /** The GitHub repository this ticket works on, when the deployment has one. */ repository?: string
   /** True for a ticket whose work is unrelated to every configured repository: no checkout and no pull request. */
-  workspaceOnly?: true }
+  workspaceOnly?: true
+  /** The backend that runs this ticket: `hermes` for an ACP session of a Hermes profile; absent runs it in a DSH Session. */
+  runtime?: 'hermes' }
 
 /** Whether a ticket is open: it has not ended. */
 export const liveTicket = (ticket: Pick<Ticket, 'ended'>): boolean => !ticket.ended

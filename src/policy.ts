@@ -89,13 +89,29 @@ export const EvalConfigSchema = z.object({
 }).strict()
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
   .refine(name => !WORKER_COMMANDS.includes(name), `${WORKER_COMMANDS.join(', ')} cannot be blocked`)
-/** Executor settings: worker model, concurrency, ticket directory root (empty defaults to `<stateDir>/work`), `prepare` command, and blocked commands. */
+/**
+ * The Hermes ACP backend for work unrelated to a repository: the local Hermes profile that serves it, the CLI that starts its
+ * ACP server, and how long one turn may run. The profile keeps its memory, skills and session history; a Ticket's directory is
+ * the ACP session's working directory.
+ */
+export const HermesConfigSchema = z.object({
+  profile: z.string().trim().regex(/^[a-z][a-z0-9_-]{0,63}$/, 'A lower-case Hermes profile id').default('jesse'),
+  command: z.string().trim().min(1).max(4096).default('hermes')
+    .refine(command => !command.startsWith('-'), 'The Hermes CLI, as a command or an absolute path'),
+  turnTimeoutSeconds: z.number().int().min(0).max(86_400).default(0),
+}).strict()
+/**
+ * Executor settings: worker model, concurrency, ticket directory root (empty defaults to `<stateDir>/work`), `prepare` command,
+ * blocked commands, and which backend runs work unrelated to a repository (`dsh`, the default, or `hermes`).
+ */
 export const ExecutorConfigSchema = z.object({
   model: RoleModelSchema.nullable().default(null),
   maxWorkers: z.number().int().min(LIMITS.maxWorkers.min).max(LIMITS.maxWorkers.max).default(3),
   directory: z.string().trim().refine(path => path === '' || path.startsWith('/'), 'An absolute path, or empty for <stateDir>/work').default(''),
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
   blockedCommands: z.array(CommandNameSchema).default([]),
+  backend: z.enum(['dsh', 'hermes']).default('dsh'),
+  hermes: HermesConfigSchema.default(() => HermesConfigSchema.parse({})),
 }).strict()
 export const SourceInstanceSchema = z.object({ enabled: z.boolean().default(true), config: z.record(z.string(), z.unknown()).default({}) }).strict()
 export const SettingsSchema = z.object({

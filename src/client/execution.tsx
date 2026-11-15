@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 import { TICKET_FILTERS, type TicketFilter } from '../app/api.ts'
 import { LIMITS } from '../limits.ts'
 import { usePoll, type SettingsView, type SourceView, type StateView } from './api.ts'
-import { DisclosureRow, Icon, InfoTip, Input, Pill } from './controls.tsx'
+import { DisclosureRow, Icon, InfoTip, Input, Pill, SegmentedControl } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { usePanel } from './provider.tsx'
 import { TicketLine } from './rows.tsx'
@@ -77,9 +77,11 @@ export function ExecutionSettings() {
   const { blocks, environment, sources } = useSettings().settings
   // Keep raw user text (such as separators between blocked commands) in the draft and parse only on save.
   const executor = blocks.executor.value
-  const saved = { ...executor, maxWorkers: String(executor.maxWorkers), blockedCommands: executor.blockedCommands.join(' ') }
+  const saved = { ...executor, maxWorkers: String(executor.maxWorkers), blockedCommands: executor.blockedCommands.join(' '),
+    hermes: { ...executor.hermes, turnTimeoutSeconds: String(executor.hermes.turnTimeoutSeconds) } }
   const draft = useBlockDraft('executor', saved, blocks.executor.revision,
-    value => ({ ...value, maxWorkers: numberOf(value.maxWorkers), blockedCommands: value.blockedCommands.split(/[\s,]+/).filter(Boolean) }))
+    value => ({ ...value, maxWorkers: numberOf(value.maxWorkers), blockedCommands: value.blockedCommands.split(/[\s,]+/).filter(Boolean),
+      hermes: { ...value.hermes, turnTimeoutSeconds: numberOf(value.hermes.turnTimeoutSeconds) ?? 0 } }))
   const value = draft.value
   const edit = (next: Partial<typeof value>) => draft.edit({ ...value, ...next })
   const prepare = useRef<HTMLTextAreaElement>(null)
@@ -100,6 +102,25 @@ export function ExecutionSettings() {
             <Input type="number" min={LIMITS.maxWorkers.min} max={LIMITS.maxWorkers.max} required value={value.maxWorkers}
               onChange={event => edit({ maxWorkers: event.target.value })} />
           </Field>
+          <Section title={t('generalBackend')} hint={t('generalBackendHint')}>
+            <SegmentedControl label={t('generalBackend')} value={value.backend}
+              options={[{ value: 'dsh', label: t('backendDsh') }, { value: 'hermes', label: t('backendHermes') }]}
+              onChange={backend => edit({ backend })} />
+          </Section>
+          {value.backend === 'hermes' && <>
+            <Field label={t('hermesProfile')} hint={t('hermesProfileHint')}>
+              <Input className="dt-mono" value={value.hermes.profile} spellCheck={false} pattern="[a-z][a-z0-9_-]*"
+                onChange={event => edit({ hermes: { ...value.hermes, profile: event.target.value } })} />
+            </Field>
+            <Field label={t('hermesCommand')} hint={t('hermesCommandHint')}>
+              <Input className="dt-mono" value={value.hermes.command} spellCheck={false}
+                onChange={event => edit({ hermes: { ...value.hermes, command: event.target.value } })} />
+            </Field>
+            <Field label={t('hermesTimeout')} hint={t('hermesTimeoutHint')}>
+              <Input type="number" min={0} max={86400} value={value.hermes.turnTimeoutSeconds}
+                onChange={event => edit({ hermes: { ...value.hermes, turnTimeoutSeconds: event.target.value } })} />
+            </Field>
+          </>}
         </div>
         <div className="dt-form dt-block">
           <h2 className="dt-block-title">{t('term.environment')}<InfoTip text={t('environmentIntro')} /></h2>
