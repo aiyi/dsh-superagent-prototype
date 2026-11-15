@@ -4,9 +4,9 @@ import { HERMES_FULL_EDIT_MODE, HERMES_FULL_PERMISSION_ENV, chooseHermesPermissi
   from '../src/executor/hermes-permissions.ts'
 
 it('launches Hermes ACP for the ticket directory with the DSH worker permission policy', () => {
-  const launch = hermesAcpLaunch({ profile: 'jesse', cwd: '/work/ticket', env: { PATH: '/bin', HOME: '/home/agent' } })
+  const launch = hermesAcpLaunch({ profile: 'work', cwd: '/work/ticket', env: { PATH: '/bin', HOME: '/home/agent' } })
   expect(launch.command).toBe('hermes')
-  expect(launch.args).toEqual(['-p', 'jesse', 'acp'])
+  expect(launch.args).toEqual(['-p', 'work', 'acp'])
   expect(launch.cwd).toBe('/work/ticket')
   expect(launch.env).toEqual({ PATH: '/bin', HOME: '/home/agent', ...HERMES_FULL_PERMISSION_ENV })
   // `hermes acp` rejects `--yolo`; the policy must travel in the environment.
@@ -14,7 +14,7 @@ it('launches Hermes ACP for the ticket directory with the DSH worker permission 
 })
 
 it('uses a command override without dropping the full-permission environment', () => {
-  const launch = hermesAcpLaunch({ profile: 'jesse', cwd: '/work/ticket', command: '/opt/hermes/bin/hermes', env: { HERMES_YOLO_MODE: '0' } })
+  const launch = hermesAcpLaunch({ profile: 'work', cwd: '/work/ticket', command: '/opt/hermes/bin/hermes', env: { HERMES_YOLO_MODE: '0' } })
   expect(launch.command).toBe('/opt/hermes/bin/hermes')
   expect(launch.env.HERMES_YOLO_MODE).toBe('1')
 })

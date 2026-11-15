@@ -49,9 +49,9 @@ answered by the backend itself, not by a person, so it stays unattended.
 
 ## Evidence
 
-On the machine that runs the `jesse` profile (2026-11-15):
+On the machine that runs the backend profile (2026-11-15):
 
-- `hermes -p jesse approvals test --env-type local -- python3 -c 'print(42)'` returned `ask-approval` before the
+- `hermes -p <profile> approvals test --env-type local -- python3 -c 'print(42)'` returned `ask-approval` before the
   change and `allow` after it. The rule was `script execution via -e/-c flag`; under the full policy the detail was
   `approval bypass active (--yolo or approvals.mode: off)`.
 - A real unattended CLI run with the profile's `approvals.mode: off` executed the command and printed `42`; no prompt
@@ -61,7 +61,7 @@ On the machine that runs the `jesse` profile (2026-11-15):
   contained `OK`, and **zero** `session/request_permission` requests were sent to the client. The tool calls were
   visible through `session/update` (111 updates).
 
-The `jesse` profile also has `approvals.mode: off` as a profile-level backstop for its unattended CLI use. The
+The backend profile also has `approvals.mode: off` as a profile-level backstop for its unattended CLI use. The
 backend process sets the environment explicitly anyway, so the policy does not depend on that profile setting.
 
 ## Remaining work
