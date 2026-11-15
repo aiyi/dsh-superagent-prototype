@@ -142,7 +142,7 @@ export class HermesAcpExecutor {
       if (!session) return
       const connection = this.connection
       if (connection?.alive) connection.cancel(session)
-      if (!liveTicket(ticket)) void this.closeSession(ticketId, session)
+      if (!liveTicket(ticket)) void this.closeSession(ticketId, session).catch(() => undefined)
     })
   }
 
@@ -272,7 +272,9 @@ export class HermesAcpExecutor {
       if (result?.timedOut) run.timedOut = true
       run.pending--
       if (run.pending > 0) return
-      void this.settle(ticketId, assignmentId, run)
+      void this.settle(ticketId, assignmentId, run).catch(error => {
+        this.reportHealth('error', `Settling a Hermes turn failed: ${String(error).slice(0, 400)}`)
+      })
     }
     turn.then(result => finish(result), (error: unknown) => finish(undefined, error))
   }
@@ -281,6 +283,7 @@ export class HermesAcpExecutor {
   private async settle(ticketId: string, assignmentId: string, run: Run): Promise<void> {
     if (this.runs.get(ticketId) === run) this.runs.delete(ticketId)
     this.busy.delete(ticketId)
+    if (this.host.closing()) return
     const ticket = this.host.store.tickets.get(ticketId)
     if (!ticket || !liveTicket(ticket) || runningAssignment(ticket)?.id !== assignmentId) return
     if (run.error !== undefined) {
