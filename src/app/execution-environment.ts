@@ -44,7 +44,8 @@ export function environmentOf(input: { deployment: Deployment; sources: SourceRe
     if (!current || score(entry.source) > score(current.source)) chosen.set(entry.kind.kind, entry)
   }
   for (const { kind, environment, config, source } of chosen.values()) {
-    const values = environment.values({ deployment, config, source, ...trigger ? { trigger } : {}, ...repository ? { repository } : {}, ...workspaceOnly ? { workspaceOnly: true } : {} })
+    const values = environment.values({ deployment, config, source, ...trigger ? { trigger } : {}, ...ticket ? { ticket: { name: ticket.name } } : {},
+      ...repository ? { repository } : {}, ...workspaceOnly ? { workspaceOnly: true } : {} })
     for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: kind.kind })
   }
   return result

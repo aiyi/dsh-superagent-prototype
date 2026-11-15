@@ -398,10 +398,24 @@ it('builds the result envelope from the worker report and sends it to Voice', as
 
 it('exposes the configured delivery workspace to a ticket from the Voice binding', async () => {
   const settings = h.runtime.store.settings()
+  const before = Object.fromEntries(h.runtime.ticketEnvironment(h.runtime.store.tickets.get((await admitted('no-delivery-dir')).ticketId)!).map(variable => [variable.key, variable.value]))
+  expect(before.DSH_SUPERAGENT_DELIVERY_DIR).toBe('')
   h.runtime.store.saveSettings({ ...settings, sources: { ...settings.sources, dsh: { enabled: true, config: { ...config, deliveryWorkspace: h.directory } } } })
-  const a = await admitted('delivery-dir')
-  const environment = Object.fromEntries(h.runtime.ticketEnvironment(h.runtime.store.tickets.get(a.ticketId)!).map(variable => [variable.key, variable.value]))
-  expect(environment.DSH_SUPERAGENT_DELIVERY_DIR).toBe(h.directory)
+  const a = await admitted('delivery-dir'), ticket = h.runtime.store.tickets.get(a.ticketId)!
+  const environment = Object.fromEntries(h.runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))
+  expect(environment.DSH_SUPERAGENT_DELIVERY_DIR).toBe(join(h.directory, 'superagent', ticket.execution!.name))
+})
+
+it('carries a Voice ticket\'s report artifacts relative to the Voice workspace', async () => {
+  const settings = h.runtime.store.settings()
+  h.runtime.store.saveSettings({ ...settings, sources: { ...settings.sources, dsh: { enabled: true, config: { ...config, deliveryWorkspace: h.directory } } } })
+  const a = await admitted('delivery-artifact'), ticket = h.runtime.store.tickets.get(a.ticketId)!
+  await h.runTool(`worker-${a.ticketId}`, 'orchestrator_report', { state: 'ready', summary: '摘要完成',
+    delivery: { artifacts: [{ path: 'summary.md', label: '摘要' }], verification: ['写完了'], limitations: [] } })
+  await h.runtime.idle()
+  await h.runTool(h.runtime.masterId, 'orchestrator_reply', { ticket_id: a.ticketId, purpose: 'result', text: '摘要写好了。' })
+  expect(replies.at(-1)).toMatchObject({ context: { purpose: 'result', result: { kind: 'artifact', summary: '摘要完成',
+    artifacts: [{ path: `superagent/${ticket.execution!.name}/summary.md`, label: '摘要' }] } } })
 })
 
 it('rolls a failed route receipt back with the Engine change, then permits a safe retry', async () => {

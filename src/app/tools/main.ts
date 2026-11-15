@@ -15,7 +15,7 @@ import type { Settings } from '../settings.ts'
 import type { Store } from '../store.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 import { dshRoute } from '../dsh-routing.ts'
-import { isDshSource } from '../../sources/dsh-protocol.ts'
+import { isDshSource, dshArtifactPath } from '../../sources/dsh-protocol.ts'
 
 const RoutingNoteSchema = z.string().trim()
   .refine(text => wordCount(text) <= NOTE_WORDS, `Routing note must not exceed ${NOTE_WORDS} words (Chinese uses word segmentation). Shorten it; do not split it across deliveries.`)
@@ -66,11 +66,17 @@ function resultEnvelope(host: MainToolsHost, ticketId: string): ResultEnvelope |
     if (prUrl) changes.push({ prUrl, state: follow.closed?.outcome === 'merged' ? 'merged' : 'open' })
   }
   const delivery = report.delivery
+  // A Voice ticket reports artifacts relative to its delivery directory, while the Voice Host resolves result paths under the
+  // bound workspace; prefix them with the ticket's delivery path there. The DSH Source writes exactly that directory.
+  const origin = host.store.triggers.get(ticket.origin.triggerId)
+  const voice = origin && isDshSource(origin.source) ? host.store.settings().sources[origin.source]?.config : undefined
+  const deliveryName = typeof voice?.deliveryWorkspace === 'string' && voice.deliveryWorkspace ? ticket.execution?.name : undefined
+  const artifacts = delivery?.artifacts.map(artifact => deliveryName ? { ...artifact, path: dshArtifactPath(deliveryName, artifact.path) } : artifact)
   const kind: ResultEnvelope['kind'] = report.state === 'blocked' || report.state === 'failed' ? 'blocked'
-    : changes.length ? 'changes' : delivery?.artifacts.length ? 'artifact' : 'answer'
+    : changes.length ? 'changes' : artifacts?.length ? 'artifact' : 'answer'
   const limitations = delivery?.limitations.length ? delivery.limitations : kind === 'blocked' ? [report.summary.slice(0, 300)] : []
   return { kind, summary: report.summary.slice(0, 2000),
-    ...(delivery?.artifacts.length ? { artifacts: delivery.artifacts } : {}), ...(changes.length ? { changes } : {}),
+    ...(artifacts?.length ? { artifacts } : {}), ...(changes.length ? { changes } : {}),
     ...(delivery?.verification.length ? { verification: delivery.verification } : {}), ...(limitations.length ? { limitations } : {}) }
 }
 const fromDecision = (decision: Decision) => ({ decision: decision.kind, reason: reasonText(decision.reason), ticketId: decision.ticketId })

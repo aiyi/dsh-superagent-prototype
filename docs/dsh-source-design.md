@@ -28,9 +28,17 @@ settings block (`dsh`, or another instance named `dsh-<name>`):
 | incomingTokenFile | Absolute file containing the credential Voice uses to call Superagent |
 | voiceTokenFile | Absolute file containing the credential Superagent uses to call Voice |
 | sharedSources | Explicit `{source: <instance-id>}` grants to continue work originating on other Sources; default empty |
-| deliveryWorkspace | Absolute directory where non-PR results write artifacts, usually the Voice user workspace. The Ticket's execution environment exposes it as `DSH_SUPERAGENT_DELIVERY_DIR`, and report paths are relative to it; empty uses the Ticket directory |
+| deliveryWorkspace | Absolute Voice user workspace that anchors deliveries. A Voice Ticket's finished deliverables go to `<deliveryWorkspace>/superagent/<ticket name>`, exposed as `DSH_SUPERAGENT_DELIVERY_DIR`; report paths are relative to it and the result envelope carries them relative to the Voice workspace. Working files stay in the Ticket directory; empty uses the Ticket directory |
 | timeoutMs | Peer request deadline; default 5000 ms |
 | maxReaders | Concurrent remote history requests per Voice origin; default 1, maximum 4; excess requests fail instead of queuing |
+
+The workspace is an anchor, not a working directory: Superagent writes a ticket's finished
+deliverables in `<deliveryWorkspace>/superagent/<ticket name>/` and nowhere else in that workspace.
+`notebook/` and `documents/` are the Voice assistant's own areas; `books/`, `stock/` and the workspace
+top level are the user's. The Voice assistant reports the artifact list and paths and need not read
+the files; binary formats such as PPTX, DOCX and PDF are for the user to open. The Ticket's own
+directory holds drafts, logs, scripts and other working files. The full contract is in
+[Voice delivery contract](voice-delegation-delivery-contract.md).
 
 Also add principalId to the instance's Policy `allowed` list. A valid transport
 credential alone is not permission to admit work. The Source rechecks binding
