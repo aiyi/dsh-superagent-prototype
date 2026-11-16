@@ -30,8 +30,8 @@ export interface AcpConnection {
   readonly alive: boolean
   initialize(): Promise<void>
   newSession(input: { cwd: string; mcpServers: readonly AcpMcpServer[] }): Promise<AcpSession>
-  /** Resumes `sessionId`; returns undefined when the agent no longer knows it, so the caller opens a new session. */
-  resumeSession(input: { sessionId: string; cwd: string; mcpServers: readonly AcpMcpServer[] }): Promise<AcpSession | undefined>
+  /** Reuses or restores `sessionId` on this connection; rejects on failure without replacing the session. */
+  resumeSession(input: { sessionId: string; cwd: string; mcpServers: readonly AcpMcpServer[] }): Promise<AcpSession>
   setMode(sessionId: string, modeId: string): Promise<void>
   /** Runs one prompt turn. With `timeoutMs`, a turn running past it is cancelled. */
   prompt(sessionId: string, text: string, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<AcpPromptResult>
@@ -110,6 +110,9 @@ export class AcpProcess implements AcpConnection {
   }
 
   private fail(error: AcpError): void {
+    this.initialized = false
+    this.starting = undefined
+    this.sessions.clear()
     for (const [id, waiter] of this.pending) {
       if (waiter.timer) clearTimeout(waiter.timer)
       waiter.reject(error)
@@ -195,15 +198,19 @@ export class AcpProcess implements AcpConnection {
     return { sessionId: result.sessionId, resumed: false }
   }
 
-  async resumeSession(input: { sessionId: string; cwd: string; mcpServers: readonly AcpMcpServer[] }): Promise<AcpSession | undefined> {
+  async resumeSession(input: { sessionId: string; cwd: string; mcpServers: readonly AcpMcpServer[] }): Promise<AcpSession> {
     if (!this.initialized) await this.initialize()
-    try {
+    // An attached session is ready for another prompt; do not replay its lifetime-growing history on every Input.
+    if (!this.sessions.has(input.sessionId)) {
+      // ACP resume returns state (possibly {}), not a new session ID. The request's ID remains the conversation handle.
       const result = await this.request('session/resume', { sessionId: input.sessionId, cwd: input.cwd, mcpServers: input.mcpServers },
-        CONTROL_TIMEOUT_MS) as { sessionId?: unknown }
-      if (typeof result?.sessionId !== 'string' || !result.sessionId) return undefined
-      this.sessions.add(result.sessionId)
-      return { sessionId: result.sessionId, resumed: true }
-    } catch { return undefined }
+        CONTROL_TIMEOUT_MS)
+      if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+        throw new AcpError('The Hermes ACP server returned an invalid resume response')
+      }
+      this.sessions.add(input.sessionId)
+    }
+    return { sessionId: input.sessionId, resumed: true }
   }
 
   async setMode(sessionId: string, modeId: string): Promise<void> {

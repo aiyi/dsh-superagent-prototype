@@ -217,19 +217,21 @@ export class HermesAcpExecutor {
     return connection
   }
 
-  /** The ACP session of a Ticket: the stored one resumed when the profile still knows it, else a new session in its directory. */
+  /** Reuses the Ticket session, restoring it after reconnect; only a Ticket without a binding opens a new session. */
   private async sessionFor(ticket: Ticket, connection: AcpConnection): Promise<AcpSession> {
     const known = this.sessions.get(ticket.id) ?? this.host.store.get(KV.hermes.session(ticket.id))
     const directory = ticket.execution?.directory ?? ''
     const mcpServers: AcpMcpServer[] = [{ type: 'http', name: 'superagent',
       url: hermesMcpUrl(this.host.bridgeUrl, ticket.id), headers: [{ name: 'Authorization', value: `Bearer ${this.host.token}` }] }]
     if (known) {
-      const resumed = await connection.resumeSession({ sessionId: known, cwd: directory, mcpServers })
-      if (resumed) {
+      try {
+        const resumed = await connection.resumeSession({ sessionId: known, cwd: directory, mcpServers })
         await this.adopt(ticket, connection, resumed.sessionId)
         return resumed
+      } catch (error) {
+        this.reportHealth('error', `Could not restore Hermes session ${known}: ${String(error).slice(0, 400)}`)
+        throw error
       }
-      this.host.store.delete(KV.hermes.session(ticket.id))
     }
     const opened = await connection.newSession({ cwd: directory, mcpServers })
     await this.adopt(ticket, connection, opened.sessionId)

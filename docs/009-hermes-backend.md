@@ -132,8 +132,13 @@ selecting Hermes ACP reveals the profile, command and turn-timeout fields:
   turns; lower `maxWorkers` if both backends are busy in one deployment.
 - **Restart:** an interrupted Hermes Assignment is recovered like a DSH one
   (`assignmentInterrupted`, then a new Assignment), and the ACP session is resumed by
-  ID. If Hermes no longer knows the session, a new one starts in the Ticket
-  directory.
+  its stored ID. A successful `session/resume` may return `{}` or initial state;
+  the request's session ID remains the handle. Sessions already attached to the
+  current ACP connection are reused directly for follow-up Inputs, without another
+  resume request or history replay. Connection loss clears only these local
+  attachments. A failed restore preserves the Ticket's binding and surfaces the
+  error; it does not silently open a replacement session. Only a Ticket without a
+  stored binding calls `session/new`.
 - **Health:** the `hermes` entry reports the connection, the last approval, or the
   error; `hermes-launch` and `hermes-delivery` report their queues.
 

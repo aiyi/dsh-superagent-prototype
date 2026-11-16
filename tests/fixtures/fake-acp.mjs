@@ -27,7 +27,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     case 'session/new': respond({ sessionId: 'fake-session', modes: { currentModeId: 'default', availableModes: [] } }); break
     case 'session/resume':
       if (process.env.FAKE_ACP_RESUME === 'fail') send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: 'unknown session' } })
-      else respond({ sessionId: params.sessionId })
+      else if (process.env.FAKE_ACP_RESUME === 'invalid') respond(null)
+      else if (process.env.FAKE_ACP_RESUME === 'hang') break
+      else if (process.env.FAKE_ACP_RESUME === 'state') respond({ modes: { currentModeId: 'dont_ask', availableModes: [] } })
+      else respond({})
       break
     case 'session/set_mode': respond({}); break
     case 'session/close': respond({}); break
@@ -47,6 +50,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
         })
         break
       }
+      if (text.includes('disconnect')) { process.exit(1) }
       if (text.includes('hang')) { pendingPrompts.set(`prompt:${sessionId}`, () => respond({ stopReason: 'cancelled' })); break }
       send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: 'hi' } } } })

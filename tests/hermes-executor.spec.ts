@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Assignment, Ticket, TicketInput } from '../src/core/index.ts'
-import type { AcpConnection, AcpFactory, AcpMcpServer, AcpOptions, AcpSession } from '../src/executor/acp.ts'
+import { AcpError, type AcpConnection, type AcpFactory, type AcpMcpServer, type AcpOptions, type AcpSession } from '../src/executor/acp.ts'
 import { HermesAcpExecutor } from '../src/executor/hermes.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { KV } from '../src/kv.ts'
@@ -30,9 +30,10 @@ class FakeConnection implements AcpConnection {
     this.newSessions.push(input)
     return { sessionId: 's1', resumed: false }
   }
-  async resumeSession(input: { sessionId: string; cwd: string; mcpServers: readonly AcpMcpServer[] }): Promise<AcpSession | undefined> {
+  async resumeSession(input: { sessionId: string; cwd: string; mcpServers: readonly AcpMcpServer[] }): Promise<AcpSession> {
     this.resumed.push(input)
-    return this.resumeWorks ? { sessionId: input.sessionId, resumed: true } : undefined
+    if (this.resumeError) throw this.resumeError
+    return { sessionId: input.sessionId, resumed: true }
   }
   async setMode(sessionId: string, modeId: string): Promise<void> { this.modes.push([sessionId, modeId]) }
   prompt(sessionId: string, text: string): Promise<{ stopReason: string }> {
@@ -45,7 +46,7 @@ class FakeConnection implements AcpConnection {
   finish(): void { for (const finish of this.finishes.splice(0)) finish() }
   readonly newSessions: { cwd: string; mcpServers: readonly AcpMcpServer[] }[] = []
   readonly resumed: { sessionId: string; cwd: string; mcpServers: readonly AcpMcpServer[] }[] = []
-  resumeWorks = false
+  resumeError?: Error
 }
 
 interface Harness {
@@ -162,13 +163,46 @@ describe('HermesAcpExecutor', () => {
     const input: TicketInput = { id: 'i1', kind: 'text', text: 'Add a conclusion.', at: '2026-11-15T00:30:00Z' }
     const h = harness({ inputs: [input], state: 'running' })
     h.kv.set(KV.hermes.session('ticket-1'), 'known-session')
-    h.connection.resumeWorks = true
     h.executor.deliver(h.ticket, h.assignment)
     await h.handlers.get('hermes-delivery')!({ ticketId: 'ticket-1' } as never, 'ticket-1')
     expect(h.connection.resumed[0]).toMatchObject({ sessionId: 'known-session', cwd: join(stateDir!, 'ticket-1') })
     expect(h.connection.prompts[0]!.text).toContain('Add a conclusion.')
     expect(h.engine.inputsDelivered).toHaveBeenCalledWith('ticket-1', 'a1', ['i1'])
     expect(h.engine.inputsRead).toHaveBeenCalledWith('ticket-1', ['i1'])
+  })
+
+  it('keeps both follow-up inputs in the session that launched the ticket', async () => {
+    const h = harness()
+    await h.handlers.get('hermes-launch')!({ ticketId: 'ticket-1', assignmentId: 'a1' } as never, 'a1')
+    for (const id of ['i1', 'i2']) {
+      h.ticket.inputs.push({ id, kind: 'text', text: `Supplement ${id}`, at: '2026-11-15T00:30:00Z' })
+      h.ticket.undelivered.push(id)
+      await h.handlers.get('hermes-delivery')!({ ticketId: 'ticket-1' } as never, 'ticket-1')
+    }
+    expect(h.connection.newSessions).toHaveLength(1)
+    expect(h.connection.prompts.map(prompt => prompt.sessionId)).toEqual(['s1', 's1', 's1'])
+    expect(h.connection.prompts.slice(1).map(prompt => prompt.text)).toEqual([
+      expect.stringContaining('Supplement i1'), expect.stringContaining('Supplement i2'),
+    ])
+    expect(h.kv.get(KV.hermes.session('ticket-1'))).toBe('s1')
+  })
+
+  it.each(['unknown session', 'ACP request session/resume timed out'])('preserves the binding and input when restore fails: %s', async message => {
+    const input: TicketInput = { id: 'i1', kind: 'text', text: 'Add a conclusion.', at: '2026-11-15T00:30:00Z' }
+    const h = harness({ inputs: [input], state: 'running' })
+    h.kv.set(KV.hermes.session('ticket-1'), 'known-session')
+    const error = new AcpError(message)
+    h.connection.resumeError = error
+    await expect(h.handlers.get('hermes-delivery')!({ ticketId: 'ticket-1' } as never, 'ticket-1')).rejects.toBe(error)
+    expect(h.kv.get(KV.hermes.session('ticket-1'))).toBe('known-session')
+    expect(h.connection.newSessions).toHaveLength(0)
+    expect(h.connection.prompts).toHaveLength(0)
+    expect(h.ticket.undelivered).toEqual(['i1'])
+    expect(h.engine.inputsDelivered).not.toHaveBeenCalled()
+    h.connection.resumeError = undefined
+    await h.handlers.get('hermes-delivery')!({ ticketId: 'ticket-1' } as never, 'ticket-1')
+    expect(h.connection.prompts[0]!.sessionId).toBe('known-session')
+    expect(h.connection.newSessions).toHaveLength(0)
   })
 
   it('cancels a turn and closes the session when the ticket ended', async () => {
